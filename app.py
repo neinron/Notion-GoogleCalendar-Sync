@@ -222,27 +222,26 @@ def create_app():
     @app.route("/calendar.ics")
     def calendar_feed():
         try:
-            # Automatic cache invalidation after 15 minutes
-            if cache["timestamp"]:
-                time_diff = (datetime.now() - cache["timestamp"]).total_seconds()
-                if time_diff > 900: # 15 minutes
-                    cache["calendar_data"] = None
-                    logger.info("Cache expired, will refresh data.")
-
-            # Simple caching (reset by /reset_cache or manual restart)
-            if cache["calendar_data"] is None:
-                cal = Calendar()
-                events = fetch_notion_events()
-                for e in events: cal.events.add(e)
-                cache["calendar_data"] = cal.serialize()
-                cache["timestamp"] = datetime.now()
+            # Removed the 15-minute cache to ensure 'newest data' on every sync.
+            # We still keep the 'courses' cache because course names/emojis rarely change 
+            # and fetching them for every event would cause a timeout on PythonAnywhere.
+            
+            logger.info("Generating live calendar feed from Notion...")
+            cal = Calendar()
+            events = fetch_notion_events()
+            for e in events: cal.events.add(e)
+            
+            # Update the debug timestamp but don't use it to block fresh fetches
+            cache["timestamp"] = datetime.now()
 
             return Response(
-                cache["calendar_data"],
+                cal.serialize(),
                 mimetype="text/calendar",
                 headers={
                     'Content-Disposition': 'attachment; filename="calendar.ics"',
-                    'Cache-Control': 'no-cache'
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache',
+                    'Expires': '0'
                 }
             )
         except Exception as e:
