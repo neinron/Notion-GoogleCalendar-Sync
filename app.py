@@ -1,0 +1,216 @@
+from flask import Flask, Response, request, jsonify
+import requests
+from ics import Calendar, Event
+from datetime import datetime
+import os
+import logging
+import sys
+from flask_cors import CORS
+
+import hmac
+import hashlib
+import subprocess
+
+def create_app():
+    app = Flask(__name__)
+    CORS(app, resources={r"/*": {"origins": "*"}})
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    logger = logging.getLogger(__name__)
+
+    NOTION_API_KEY = os.getenv("NOTION_API_KEY")
+    DATABASE_ID = os.getenv("DATABASE_ID")
+    GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
+    WSGI_FILE = os.getenv("WSGI_FILE", "wsgi.py")
+
+    if not NOTION_API_KEY or not DATABASE_ID:
+        logger.warning("Please set NOTION_API_KEY and DATABASE_ID environment variables")
+
+    NOTION_API_URL = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
+    NOTION_HEADERS = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Notion-Version": "2022-06-28",
+        "Content-Type": "application/json"
+    }
+
+    # In-memory cache
+    cache = {
+        "calendar_data": None,
+        "timestamp": None
+    }
+
+    @app.route("/")
+    def index():
+        return "Notion Calendar Sync Server is running!"
+
+    @app.route("/reset_cache")
+    def reset_cache():
+        cache["calendar_data"] = None
+        cache["timestamp"] = None
+        logger.info("Cache manually reset via /reset_cache")
+        return "Cache cleared!", 200
+
+    @app.route("/update", methods=["POST"])
+    def update():
+        # Verify signature if secret is set
+        if GITHUB_WEBHOOK_SECRET:
+            signature = request.headers.get("X-Hub-Signature-256")
+            if not signature:
+                abort(400, "Missing signature")
+            
+            hash_object = hmac.new(
+                GITHUB_WEBHOOK_SECRET.encode("utf-8"),
+                msg=request.data,
+                digestmod=hashlib.sha256
+            )
+            expected_signature = "sha256=" + hash_object.hexdigest()
+            
+            if not hmac.compare_digest(expected_signature, signature):
+                abort(403, "Invalid signature")
+
+        # Pull the latest code
+        try:
+            subprocess.run(["git", "pull"], check=True)
+            
+            # Touch the WSGI file to trigger a reload on PythonAnywhere
+            if os.path.exists(WSGI_FILE):
+                os.utime(WSGI_FILE, None)
+                
+            return "Update successful and app reloaded", 200
+        except subprocess.CalledProcessError as e:
+            return f"Update failed: {str(e)}", 500
+
+    def fetch_notion_events():
+        if not NOTION_API_KEY or not DATABASE_ID:
+            return []
+
+        logger.info(f"Fetching events from Notion database {DATABASE_ID}")
+        all_results = []
+        next_cursor = None
+
+        while True:
+            payload = {
+                "page_size": 100,
+                "filter": {
+                    "property": "Name",
+                    "title": { "is_not_empty": True }
+                }
+            }
+            if next_cursor:
+                payload["start_cursor"] = next_cursor
+
+            res = requests.post(NOTION_API_URL, headers=NOTION_HEADERS, json=payload)
+            if res.status_code != 200:
+                logger.error(f"Notion API error: {res.status_code} - {res.text}")
+                break
+
+            data = res.json()
+            all_results.extend(data.get("results", []))
+            if not data.get("has_more"):
+                break
+            next_cursor = data.get("next_cursor")
+
+        events = []
+        for page in all_results:
+            properties = page.get('properties', {})
+            
+            # Filter by Registration Checkbox Rollup (if present)
+            rollup = properties.get('Registration', {}).get('rollup', {})
+            if rollup.get('type') == 'array':
+                checkbox_items = rollup.get('array', [])
+                is_registered = any(item.get('checkbox') for item in checkbox_items)
+                if not is_registered:
+                    continue
+
+            # Extract Title
+            title_list = properties.get('Name', {}).get('title', [{}])
+            name = title_list[0].get('plain_text', 'Untitled Event') if title_list else 'Untitled Event'
+
+            # Extract Date
+            do_date = properties.get('Do Date', {}).get('date', {})
+            start_date = do_date.get('start')
+            end_date = do_date.get('end')
+
+            if not start_date:
+                continue
+
+            # Extract Course Icon and Name (if present)
+            course_info = ""
+            relation = properties.get('Course', {}).get('relation', [])
+            if relation:
+                course_id = relation[0].get('id')
+                try:
+                    course_res = requests.get(f"https://api.notion.com/v1/pages/{course_id}", headers=NOTION_HEADERS)
+                    if course_res.status_code == 200:
+                        course_data = course_res.json()
+                        c_name = course_data.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '')
+                        c_emoji = course_data.get('icon', {}).get('emoji', '')
+                        course_info = f"{c_emoji} {c_name}".strip()
+                except Exception:
+                    pass
+
+            status = properties.get('Status', {}).get('status', {}).get('name', '')
+
+            event = Event()
+            event.name = f"{name} - {course_info}" if course_info else name
+            
+            try:
+                # Parse ISO date/time
+                event.begin = datetime.fromisoformat(start_date.replace('Z', '+00:00')) if 'T' in start_date else datetime.fromisoformat(start_date)
+                if end_date:
+                    event.end = datetime.fromisoformat(end_date.replace('Z', '+00:00')) if 'T' in end_date else datetime.fromisoformat(end_date)
+                else:
+                    # Default 1 hour event if no end date
+                    event.end = event.begin.replace(hour=event.begin.hour + 1) if 'T' in start_date else event.begin
+                
+                if 'T' not in start_date:
+                    event.make_all_day()
+            except Exception as e:
+                logger.warning(f"Date parse error for '{name}': {e}")
+                continue
+
+            # Description
+            desc = []
+            if status: desc.append(f"Status: {status}")
+            if page.get('url'): desc.append(f"Notion URL: {page['url']}")
+            event.description = "\n".join(desc)
+
+            events.append(event)
+        
+        return events
+
+    @app.route("/calendar.ics")
+    def calendar_feed():
+        try:
+            # Simple caching (reset by /reset_cache or manual restart)
+            if cache["calendar_data"] is None:
+                cal = Calendar()
+                events = fetch_notion_events()
+                for e in events: cal.events.add(e)
+                cache["calendar_data"] = str(cal)
+                cache["timestamp"] = datetime.now()
+
+            return Response(
+                cache["calendar_data"],
+                mimetype="text/calendar",
+                headers={
+                    'Content-Disposition': 'attachment; filename="calendar.ics"',
+                    'Cache-Control': 'no-cache'
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error: {e}", exc_info=True)
+            return "Internal Server Error", 500
+
+    return app
+
+app = create_app()
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5004))
+    app.run(host="0.0.0.0", port=port)
