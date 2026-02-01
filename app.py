@@ -182,8 +182,8 @@ def create_app():
             due_date_obj = properties.get('Due Date', {}).get('date', {})
             due_date = due_date_obj.get('start') if due_date_obj else None
             
-            # Extract 'Due?' formula safely
-            due_prop = properties.get('Due?', {}) or {}
+            # Extract 'Due' formula safely
+            due_prop = properties.get('Due', {}) or {}
             due_formula = due_prop.get('formula', {}) or {}
             due_display = ""
             if due_formula.get('type') == 'boolean':
