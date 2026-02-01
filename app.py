@@ -207,6 +207,13 @@ def create_app():
     @app.route("/calendar.ics")
     def calendar_feed():
         try:
+            # Automatic cache invalidation after 15 minutes
+            if cache["timestamp"]:
+                time_diff = (datetime.now() - cache["timestamp"]).total_seconds()
+                if time_diff > 900: # 15 minutes
+                    cache["calendar_data"] = None
+                    logger.info("Cache expired, will refresh data.")
+
             # Simple caching (reset by /reset_cache or manual restart)
             if cache["calendar_data"] is None:
                 cal = Calendar()
