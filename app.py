@@ -32,7 +32,10 @@ def create_app():
     NOTION_API_KEY = os.getenv("NOTION_API_KEY")
     DATABASE_ID = os.getenv("DATABASE_ID")
     GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET")
-    WSGI_FILE = os.getenv("WSGI_FILE", "wsgi.py")
+    
+    # Default to local wsgi.py, but use PythonAnywhere path if detected
+    PA_WSGI = f"/var/www/{os.getenv('USER')}_pythonanywhere_com_wsgi.py"
+    WSGI_FILE = os.getenv("WSGI_FILE", PA_WSGI if os.path.exists(PA_WSGI) else "wsgi.py")
 
     if not NOTION_API_KEY or not DATABASE_ID:
         logger.warning("Please set NOTION_API_KEY and DATABASE_ID environment variables")
