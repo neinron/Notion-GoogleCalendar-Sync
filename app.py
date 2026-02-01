@@ -175,6 +175,9 @@ def create_app():
                         pass
 
             status = properties.get('Status', {}).get('status', {}).get('name', '')
+            event_type = properties.get('Type', {}).get('select', {}).get('name', '')
+            due_date_obj = properties.get('Due Date', {}).get('date', {})
+            due_date = due_date_obj.get('start') if due_date_obj else None
 
             event = Event()
             event.name = f"{name} - {course_info}" if course_info else name
@@ -197,7 +200,9 @@ def create_app():
             # Description
             desc = []
             if status: desc.append(f"Status: {status}")
-            if page.get('url'): desc.append(f"Notion URL: {page['url']}")
+            if event_type: desc.append(f"Type: {event_type}")
+            if due_date: desc.append(f"Deadline: {due_date}")
+            if page.get('url'): desc.append(f"\nNotion URL: {page['url']}")
             event.description = "\n".join(desc)
 
             events.append(event)
