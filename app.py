@@ -123,14 +123,6 @@ def create_app():
         for page in all_results:
             properties = page.get('properties', {})
             
-            # Filter by Registration Checkbox Rollup (if present)
-            rollup = properties.get('Registration', {}).get('rollup', {})
-            if rollup.get('type') == 'array':
-                checkbox_items = rollup.get('array', [])
-                is_registered = any(item.get('checkbox') for item in checkbox_items)
-                if not is_registered:
-                    continue
-
             # Extract Title
             title_list = properties.get('Name', {}).get('title', [{}])
             name = title_list[0].get('plain_text', 'Untitled Event') if title_list else 'Untitled Event'

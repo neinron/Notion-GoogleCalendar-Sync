@@ -1,6 +1,8 @@
 # Notion to iCloud Sync Tool
 
-A lightweight Flask service that transforms a Notion database into an iCalendar (`.ics`) feed.
+A lightweight Flask-based service that transforms a Notion database into an iCalendar (`.ics`) feed, offering:
+- **Rich Data**: Includes course names, emojis, statuses, and Notion URLs in the calendar events.
+- **Automatic Sync**: Fetches live data from Notion on demand.
 
 ## Setup
 
