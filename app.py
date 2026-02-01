@@ -44,6 +44,10 @@ def create_app():
         "Content-Type": "application/json"
     }
 
+    # Persistent session for connection pooling
+    session = requests.Session()
+    session.headers.update(NOTION_HEADERS)
+
     # In-memory cache
     cache = {
         "calendar_data": None,
@@ -110,19 +114,31 @@ def create_app():
             if next_cursor:
                 payload["start_cursor"] = next_cursor
 
-            res = requests.post(NOTION_API_URL, headers=NOTION_HEADERS, json=payload)
-            if res.status_code != 200:
-                logger.error(f"Notion API error: {res.status_code} - {res.text}")
-                break
+            try:
+                res = session.post(NOTION_API_URL, json=payload, timeout=10)
+                if res.status_code != 200:
+                    logger.error(f"Notion API error: {res.status_code} - {res.text}")
+                    break
 
-            data = res.json()
-            all_results.extend(data.get("results", []))
-            if not data.get("has_more"):
+                data = res.json()
+                all_results.extend(data.get("results", []))
+                logger.info(f"Retrieved {len(all_results)} pages so far...")
+                
+                if not data.get("has_more") or len(all_results) > 500: # Safety cap
+                    break
+                next_cursor = data.get("next_cursor")
+            except Exception as e:
+                logger.error(f"Request failed: {e}")
                 break
-            next_cursor = data.get("next_cursor")
 
         events = []
-        for page in all_results:
+        total = len(all_results)
+        logger.info(f"Starting to process {total} events...")
+
+        for i, page in enumerate(all_results):
+            if i % 20 == 0 and i > 0:
+                logger.info(f"Processed {i}/{total} events...")
+
             properties = page.get('properties', {})
             
             # Extract Title
@@ -146,14 +162,16 @@ def create_app():
                     course_info = cache["courses"][course_id]
                 else:
                     try:
-                        course_res = requests.get(f"https://api.notion.com/v1/pages/{course_id}", headers=NOTION_HEADERS)
+                        course_res = session.get(f"https://api.notion.com/v1/pages/{course_id}", timeout=5)
                         if course_res.status_code == 200:
                             course_data = course_res.json()
                             c_name = course_data.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '')
                             c_emoji = course_data.get('icon', {}).get('emoji', '')
                             course_info = f"{c_emoji} {c_name}".strip()
                             cache["courses"][course_id] = course_info
-                    except Exception:
+                            logger.info(f"Cached new course: {course_info}")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch course {course_id}: {e}")
                         pass
 
             status = properties.get('Status', {}).get('status', {}).get('name', '')
