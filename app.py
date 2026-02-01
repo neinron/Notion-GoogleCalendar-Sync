@@ -10,10 +10,12 @@ from flask_cors import CORS
 import hmac
 import hashlib
 import subprocess
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    # Load environment variables from .env file
+    load_dotenv()
+except ImportError:
+    pass
 
 def create_app():
     app = Flask(__name__)
