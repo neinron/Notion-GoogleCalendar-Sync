@@ -142,23 +142,24 @@ def create_app():
             if i % 20 == 0 and i > 0:
                 logger.info(f"Processed {i}/{total} events...")
 
-            properties = page.get('properties', {})
+            # Safe extraction starting with properties
+            props = page.get('properties') or {}
             
             # Extract Title
-            title_list = properties.get('Name', {}).get('title', [{}])
+            title_list = (props.get('Name') or {}).get('title', [{}])
             name = title_list[0].get('plain_text', 'Untitled Event') if title_list else 'Untitled Event'
 
             # Extract Date
-            do_date = properties.get('Do Date', {}).get('date', {})
-            start_date = do_date.get('start')
-            end_date = do_date.get('end')
+            do_date_obj = (props.get('Do Date') or {}).get('date') or {}
+            start_date = do_date_obj.get('start')
+            end_date = do_date_obj.get('end')
 
             if not start_date:
                 continue
 
             # Extract Course Info with Cache
             course_info = ""
-            relation = properties.get('Course', {}).get('relation', [])
+            relation = (props.get('Course') or {}).get('relation', [])
             if relation:
                 course_id = relation[0].get('id')
                 if course_id in cache["courses"]:
@@ -168,8 +169,9 @@ def create_app():
                         course_res = session.get(f"https://api.notion.com/v1/pages/{course_id}", timeout=5)
                         if course_res.status_code == 200:
                             course_data = course_res.json()
-                            c_name = course_data.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '')
-                            c_emoji = course_data.get('icon', {}).get('emoji', '')
+                            c_props = course_data.get('properties') or {}
+                            c_name = (c_props.get('Name') or {}).get('title', [{}])[0].get('plain_text', '')
+                            c_emoji = (course_data.get('icon') or {}).get('emoji', '')
                             course_info = f"{c_emoji} {c_name}".strip()
                             cache["courses"][course_id] = course_info
                             logger.info(f"Cached new course: {course_info}")
@@ -177,13 +179,13 @@ def create_app():
                         logger.warning(f"Failed to fetch course {course_id}: {e}")
                         pass
 
-            status = properties.get('Status', {}).get('status', {}).get('name', '')
-            event_type = properties.get('Type', {}).get('select', {}).get('name', '')
-            due_date_obj = properties.get('Due Date', {}).get('date', {})
+            status = ((props.get('Status') or {}).get('status') or {}).get('name', '')
+            event_type = ((props.get('Type') or {}).get('select') or {}).get('name', '')
+            due_date_obj = (props.get('Due Date') or {}).get('date') or {}
             due_date = due_date_obj.get('start') if due_date_obj else None
             
             # Extract 'Due' formula safely
-            due_prop = properties.get('Due', {}) or {}
+            due_prop = props.get('Due') or {}
             due_formula = due_prop.get('formula', {}) or {}
             due_display = ""
             if due_formula.get('type') == 'boolean':
