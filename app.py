@@ -178,6 +178,14 @@ def create_app():
             event_type = properties.get('Type', {}).get('select', {}).get('name', '')
             due_date_obj = properties.get('Due Date', {}).get('date', {})
             due_date = due_date_obj.get('start') if due_date_obj else None
+            
+            # Extract 'Due?' formula (e.g., boolean or string)
+            due_formula = properties.get('Due?', {}).get('formula', {})
+            due_display = ""
+            if due_formula.get('type') == 'boolean':
+                due_display = "Yes" if due_formula.get('boolean') else "No"
+            elif due_formula.get('type') == 'string':
+                due_display = due_formula.get('string', '')
 
             event = Event()
             event.name = f"{name} - {course_info}" if course_info else name
@@ -202,6 +210,7 @@ def create_app():
             if course_info: desc.append(f"Course: {course_info}")
             if status: desc.append(f"Status: {status}")
             if event_type: desc.append(f"Type: {event_type}")
+            if due_display: desc.append(f"Is Due: {due_display}")
             if due_date: desc.append(f"Deadline: {due_date}")
             if page.get('url'): desc.append(f"\nNotion URL: {page['url']}")
             event.description = "\n".join(desc)
