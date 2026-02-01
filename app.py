@@ -45,17 +45,19 @@ def create_app():
     # In-memory cache
     cache = {
         "calendar_data": None,
-        "timestamp": None
+        "timestamp": None,
+        "courses": {}  # Cache for course IDs -> Course Info
     }
 
     @app.route("/")
     def index():
-        return "Notion Calendar Sync Server is running!"
+        return "Notion Calendar Sync Server is running!", 200
 
     @app.route("/reset_cache")
     def reset_cache():
         cache["calendar_data"] = None
         cache["timestamp"] = None
+        cache["courses"] = {}
         logger.info("Cache manually reset via /reset_cache")
         return "Cache cleared!", 200
 
@@ -65,7 +67,7 @@ def create_app():
         if GITHUB_WEBHOOK_SECRET:
             signature = request.headers.get("X-Hub-Signature-256")
             if not signature:
-                abort(400, "Missing signature")
+                return "Missing signature", 400
             
             hash_object = hmac.new(
                 GITHUB_WEBHOOK_SECRET.encode("utf-8"),
@@ -75,22 +77,20 @@ def create_app():
             expected_signature = "sha256=" + hash_object.hexdigest()
             
             if not hmac.compare_digest(expected_signature, signature):
-                abort(403, "Invalid signature")
+                return "Invalid signature", 403
 
         # Pull the latest code
         try:
             subprocess.run(["git", "pull"], check=True)
-            
-            # Touch the WSGI file to trigger a reload on PythonAnywhere
             if os.path.exists(WSGI_FILE):
                 os.utime(WSGI_FILE, None)
-                
             return "Update successful and app reloaded", 200
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             return f"Update failed: {str(e)}", 500
 
     def fetch_notion_events():
         if not NOTION_API_KEY or not DATABASE_ID:
+            logger.error("API Key or Database ID missing during fetch")
             return []
 
         logger.info(f"Fetching events from Notion database {DATABASE_ID}")
@@ -143,20 +143,24 @@ def create_app():
             if not start_date:
                 continue
 
-            # Extract Course Icon and Name (if present)
+            # Extract Course Info with Cache
             course_info = ""
             relation = properties.get('Course', {}).get('relation', [])
             if relation:
                 course_id = relation[0].get('id')
-                try:
-                    course_res = requests.get(f"https://api.notion.com/v1/pages/{course_id}", headers=NOTION_HEADERS)
-                    if course_res.status_code == 200:
-                        course_data = course_res.json()
-                        c_name = course_data.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '')
-                        c_emoji = course_data.get('icon', {}).get('emoji', '')
-                        course_info = f"{c_emoji} {c_name}".strip()
-                except Exception:
-                    pass
+                if course_id in cache["courses"]:
+                    course_info = cache["courses"][course_id]
+                else:
+                    try:
+                        course_res = requests.get(f"https://api.notion.com/v1/pages/{course_id}", headers=NOTION_HEADERS)
+                        if course_res.status_code == 200:
+                            course_data = course_res.json()
+                            c_name = course_data.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '')
+                            c_emoji = course_data.get('icon', {}).get('emoji', '')
+                            course_info = f"{c_emoji} {c_name}".strip()
+                            cache["courses"][course_id] = course_info
+                    except Exception:
+                        pass
 
             status = properties.get('Status', {}).get('status', {}).get('name', '')
 
