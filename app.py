@@ -10,6 +10,10 @@ from flask_cors import CORS
 import hmac
 import hashlib
 import subprocess
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 def create_app():
     app = Flask(__name__)
@@ -192,7 +196,7 @@ def create_app():
                 cal = Calendar()
                 events = fetch_notion_events()
                 for e in events: cal.events.add(e)
-                cache["calendar_data"] = str(cal)
+                cache["calendar_data"] = cal.serialize()
                 cache["timestamp"] = datetime.now()
 
             return Response(
