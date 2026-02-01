@@ -182,7 +182,14 @@ def create_app():
             status = ((props.get('Status') or {}).get('status') or {}).get('name', '')
             event_type = ((props.get('Type') or {}).get('select') or {}).get('name', '')
             due_date_obj = (props.get('Due Date') or {}).get('date') or {}
-            due_date = due_date_obj.get('start') if due_date_obj else None
+            due_date_raw = due_date_obj.get('start') if due_date_obj else None
+            due_date = ""
+            if due_date_raw:
+                try:
+                    dt = datetime.fromisoformat(due_date_raw.split('T')[0])
+                    due_date = dt.strftime("%A, %d.%m.%Y")
+                except Exception:
+                    due_date = due_date_raw
             
             # Extract 'Due' formula safely
             due_prop = props.get('Due') or {}
