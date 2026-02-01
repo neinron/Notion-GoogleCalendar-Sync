@@ -199,6 +199,7 @@ def create_app():
 
             # Description
             desc = []
+            if course_info: desc.append(f"Course: {course_info}")
             if status: desc.append(f"Status: {status}")
             if event_type: desc.append(f"Type: {event_type}")
             if due_date: desc.append(f"Deadline: {due_date}")
