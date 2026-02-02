@@ -110,8 +110,18 @@ def create_app():
             payload = {
                 "page_size": 100,
                 "filter": {
-                    "property": "Name",
-                    "title": { "is_not_empty": True }
+                    "and": [
+                        {
+                            "property": "Name",
+                            "title": { "is_not_empty": True }
+                        },
+                        {
+                            "property": "Status",
+                            "status": {
+                                "does_not_equal": "Done"
+                            }
+                        }
+                    ]
                 }
             }
             if next_cursor:
@@ -180,6 +190,9 @@ def create_app():
                         pass
 
             status = ((props.get('Status') or {}).get('status') or {}).get('name', '')
+            if status.lower() == 'done':
+                continue
+
             event_type = ((props.get('Type') or {}).get('select') or {}).get('name', '')
             due_date_obj = (props.get('Due Date') or {}).get('date') or {}
             due_date_raw = due_date_obj.get('start') if due_date_obj else None
