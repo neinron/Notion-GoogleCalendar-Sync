@@ -1,4 +1,4 @@
-# Notion Google Calendar Two-Way Sync
+# Notion Calendar Sync
 
 Flask service for PythonAnywhere that syncs a Notion task database with one dedicated Google Calendar.
 
@@ -31,10 +31,10 @@ GITHUB_WEBHOOK_SECRET=long-random-secret
 Optional:
 
 ```env
-VAR_DIR=/home/<user>/Notion-iCloud-Synch/var
-STATE_DB_PATH=/home/<user>/Notion-iCloud-Synch/var/sync_state.sqlite3
+VAR_DIR=/home/<user>/Notion-Calendar-Sync/var
+STATE_DB_PATH=/home/<user>/Notion-Calendar-Sync/var/sync_state.sqlite3
 WSGI_FILE=/var/www/<user>_pythonanywhere_com_wsgi.py
-REPO_PATH=/home/<user>/Notion-iCloud-Synch
+REPO_PATH=/home/<user>/Notion-Calendar-Sync
 DEPLOY_BRANCH=main
 PYTHON_BIN=/home/<user>/.virtualenvs/notion-sync/bin/python
 ```
@@ -59,8 +59,8 @@ python -m unittest discover -s tests
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/neinron/Notion-iCloud-Synch.git
-   cd Notion-iCloud-Synch
+   git clone https://github.com/neinron/Notion-Calendar-Sync.git
+   cd Notion-Calendar-Sync
    ```
 
 2. Create the virtualenv and install dependencies:

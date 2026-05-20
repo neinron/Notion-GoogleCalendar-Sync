@@ -43,7 +43,7 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.route("/")
     def index():
-        return jsonify({"ok": True, "service": "notion-google-two-way-sync"})
+        return jsonify({"ok": True, "service": "notion-calendar-sync"})
 
     @app.route("/health")
     def health():
