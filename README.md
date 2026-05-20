@@ -1,6 +1,12 @@
 # Notion Calendar Sync
 
-Flask service for PythonAnywhere that syncs a Notion task database with one dedicated Google Calendar.
+Cloudflare Worker service that syncs a Notion task database with one dedicated Google Calendar at:
+
+```text
+https://notionsync.jaronschurer.com
+```
+
+The legacy Flask/PythonAnywhere service remains in this repository as a temporary fallback during cutover.
 
 The old ICS feed has been removed. Google Calendar now stores real events, and the service writes safe changes back to Notion.
 
@@ -11,9 +17,17 @@ The old ICS feed has been removed. Google Calendar now stores real events, and t
 - Moving or editing a synced Google event updates the Notion task.
 - Deleting a Google event does not delete or complete the Notion task; it clears the task's `Do Date`.
 - Completed Notion tasks remove their Google events.
-- If Notion and Google both changed since the last successful sync, the task is marked as a conflict and neither side is overwritten.
+- If Notion and Google both changed since the last successful sync, Notion wins and the Google event is rebuilt from the Notion task.
 
-## Required Environment Variables
+## Cloudflare Worker Runtime
+
+- HTTP/webhook runtime: Cloudflare Workers.
+- State: fresh D1 database bound as `DB`.
+- Secrets: Cloudflare Worker Secrets.
+- Public hostname: `notionsync.jaronschurer.com`.
+- Cron Triggers: every 15 minutes for safety sync, and daily at 03:07 UTC for Google watch renewal plus safety sync.
+
+## Required Worker Secrets
 
 ```env
 NOTION_API_KEY=secret_...
@@ -25,95 +39,64 @@ GOOGLE_CLIENT_SECRET=...
 GOOGLE_REFRESH_TOKEN=...
 
 SYNC_SECRET=long-random-secret
-PUBLIC_BASE_URL=https://<user>.pythonanywhere.com
 GOOGLE_WEBHOOK_TOKEN=long-random-secret
-GITHUB_WEBHOOK_SECRET=long-random-secret
 ```
 
 Optional:
 
 ```env
-VAR_DIR=/home/<user>/Notion-Calendar-Sync/var
-STATE_DB_PATH=/home/<user>/Notion-Calendar-Sync/var/sync_state.sqlite3
-WSGI_FILE=/var/www/<user>_pythonanywhere_com_wsgi.py
-REPO_PATH=/home/<user>/Notion-Calendar-Sync
-DEPLOY_BRANCH=main
-PYTHON_BIN=/home/<user>/.virtualenvs/notion-sync/bin/python
 NOTION_WEBHOOK_VERIFICATION_TOKEN=secret_from_notion_after_subscription_probe
 ```
 
-## Local Development
+`PUBLIC_BASE_URL=https://notionsync.jaronschurer.com`, `NOTION_VERSION`, and `GOOGLE_TIME_ZONE` are non-secret Worker vars in `wrangler.toml`.
+
+## Worker Development
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python app.py
+npm install
+npm run typecheck
+npm run test:worker
 ```
 
-Run tests:
+Create the D1 database, copy the returned `database_id` into `wrangler.toml`, and apply migrations:
 
 ```bash
-python -m unittest discover -s tests
+npx wrangler d1 create notion_calendar_sync
+npm run d1:migrate:remote
 ```
 
-## PythonAnywhere Setup
-
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/neinron/Notion-Calendar-Sync.git
-   cd Notion-Calendar-Sync
-   ```
-
-2. Create the virtualenv and install dependencies:
-
-   ```bash
-   mkvirtualenv --python=/usr/bin/python3.10 notion-sync
-   pip install -r requirements.txt
-   ```
-
-3. Configure the Web app:
-
-   - Manual WSGI app.
-   - Virtualenv: `/home/<user>/.virtualenvs/notion-sync`.
-   - WSGI file imports:
-
-     ```python
-     from app import app as application
-     ```
-
-4. Put environment variables in PythonAnywhere's WSGI file or another PythonAnywhere-supported secret mechanism. Do not commit `.env`.
-
-5. Add a scheduled task:
-
-   ```bash
-   curl -fsS "https://<user>.pythonanywhere.com/sync?token=$SYNC_SECRET"
-   ```
-
-On PythonAnywhere Free, a daily scheduled task is still useful even with webhooks. Use it to renew the Google watch channel and run a safety sync:
+Set production secrets:
 
 ```bash
-curl -fsS "https://<user>.pythonanywhere.com/google/watch/renew?token=<SYNC_SECRET>"
-curl -fsS "https://<user>.pythonanywhere.com/sync?token=<SYNC_SECRET>"
+npx wrangler secret put NOTION_API_KEY
+npx wrangler secret put DATABASE_ID
+npx wrangler secret put GOOGLE_CALENDAR_ID
+npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put GOOGLE_REFRESH_TOKEN
+npx wrangler secret put SYNC_SECRET
+npx wrangler secret put GOOGLE_WEBHOOK_TOKEN
 ```
 
-## GitHub Auto-Deploy
+Generate a fresh `GOOGLE_WEBHOOK_TOKEN`; do not reuse tokens from chats, logs, or old environments.
 
-Add a GitHub webhook:
+Deploy:
 
-- Payload URL: `https://<user>.pythonanywhere.com/update`
-- Content type: `application/json`
-- Secret: same value as `GITHUB_WEBHOOK_SECRET`
-- Events: push only
+```bash
+npm run deploy:worker
+```
 
-The deploy route:
+`wrangler.toml` binds the Worker route for `notionsync.jaronschurer.com/*`. SSL is Cloudflare-managed.
 
-- Requires `X-Hub-Signature-256`.
-- Ignores non-`main` pushes.
-- Runs `git fetch`, `git reset --hard origin/main`, `pip install -r requirements.txt`.
-- Touches the WSGI file to reload PythonAnywhere.
-- Uses a lock file to prevent parallel deploys.
+## Cutover Checklist
+
+1. Deploy the Worker and confirm `GET https://notionsync.jaronschurer.com/health` returns `ok: true`.
+2. Run `GET /sync?token=<SYNC_SECRET>` manually.
+3. Run `GET /google/watch/renew?token=<SYNC_SECRET>`.
+4. Confirm `GET /webhook-channels?token=<SYNC_SECRET>` shows an active Google channel.
+5. Change the Notion webhook subscription to `https://notionsync.jaronschurer.com/webhooks/notion` and complete verification.
+6. Watch Worker logs for the first 24 hours.
+7. Disable PythonAnywhere scheduled tasks and webhooks only after Cloudflare sync and webhooks are stable.
 
 ## HTTP Endpoints
 
@@ -124,33 +107,48 @@ The deploy route:
 - `POST /webhooks/notion`: Notion webhook receiver.
 - `GET|POST /google/watch/renew?token=...`: replace the Google Calendar events watch channel.
 - `GET /webhook-channels?token=...`: list registered Google watch channels.
-- `POST /update`: GitHub deploy webhook.
 
-## Notion And Google Webhooks
+## Webhooks
 
 ### Google Calendar
 
-1. Set `PUBLIC_BASE_URL` and `GOOGLE_WEBHOOK_TOKEN`.
-2. Reload the PythonAnywhere web app.
-3. Register or renew the channel:
+Register or renew the channel:
 
-   ```bash
-   curl -fsS "https://<user>.pythonanywhere.com/google/watch/renew?token=<SYNC_SECRET>"
-   ```
+```bash
+curl -fsS "https://notionsync.jaronschurer.com/google/watch/renew?token=<SYNC_SECRET>"
+```
 
-4. Google sends `sync` notifications first; the app acknowledges those without running a sync.
-5. Later `exists` notifications run the normal sync engine.
+Google sends `sync` notifications first; the Worker acknowledges those without running a sync. Later `exists` notifications run the normal sync engine.
 
-Google watch channels expire. Renew them daily or whenever `/webhook-channels` shows an old expiration.
+Google watch channels expire. The daily Cron Trigger renews them; `/webhook-channels` shows the active channel metadata.
 
 ### Notion
 
-1. In the Notion integration settings, create a webhook subscription pointing to:
+Create a Notion webhook subscription pointing to:
 
-   ```text
-   https://<user>.pythonanywhere.com/webhooks/notion
-   ```
+```text
+https://notionsync.jaronschurer.com/webhooks/notion
+```
 
-2. Notion will POST a one-time `verification_token`. The app stores it in SQLite automatically. You can also paste that token into `NOTION_WEBHOOK_VERIFICATION_TOKEN` and reload the web app if you prefer env-only configuration.
-3. Verify the subscription in Notion.
-4. Future Notion webhook payloads must include a matching `X-Notion-Signature`; otherwise the app rejects them.
+Notion will POST a one-time `verification_token`. The Worker stores it in D1 automatically. You can also set `NOTION_WEBHOOK_VERIFICATION_TOKEN` as a Worker secret if you prefer env-only configuration.
+
+Future Notion webhook payloads must include a matching `X-Notion-Signature`; otherwise the Worker rejects them.
+
+## PythonAnywhere Fallback
+
+The Flask service is legacy fallback only. It still supports the same sync model, plus the old GitHub `/update` auto-deploy route for PythonAnywhere.
+
+Local fallback development:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
+Python fallback tests:
+
+```bash
+python -m unittest discover -s tests
+```

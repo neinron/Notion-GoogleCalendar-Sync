@@ -1,0 +1,22 @@
+name = "notion-calendar-sync"
+main = "worker/src/index.ts"
+compatibility_date = "2026-05-20"
+
+routes = [
+  { pattern = "notionsync.jaronschurer.com/*", zone_name = "jaronschurer.com" }
+]
+
+[triggers]
+crons = ["*/15 * * * *", "7 3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "notion_calendar_sync"
+database_id = "fcafdee4-6ef6-4b1d-ac6a-671a5c41cc8e"
+migrations_dir = "migrations"
+
+[vars]
+NOTION_VERSION = "2022-06-28"
+DEPLOY_BRANCH = "main"
+PUBLIC_BASE_URL = "https://notionsync.jaronschurer.com"
+GOOGLE_TIME_ZONE = "Europe/Berlin"

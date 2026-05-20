@@ -1,0 +1,19 @@
+{
+  "name": "notion-calendar-sync",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:worker": "node --import tsx --test worker/test/*.test.mjs",
+    "deploy:worker": "wrangler deploy",
+    "d1:migrate:local": "wrangler d1 migrations apply notion_calendar_sync --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply notion_calendar_sync --remote"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260520.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.15.2"
+  }
+}

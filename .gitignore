@@ -8,3 +8,6 @@ var/
 *.sqlite3
 client_secret*.json
 token*.json
+.wrangler/
+node_modules/
+dist/
