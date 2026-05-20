@@ -13,6 +13,9 @@ class Config:
     google_client_id: str
     google_client_secret: str
     google_refresh_token: str
+    public_base_url: str
+    google_webhook_token: str
+    notion_webhook_verification_token: str
     github_webhook_secret: str
     sync_secret: str
     repo_path: Path
@@ -37,6 +40,9 @@ class Config:
             google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
             google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             google_refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN", ""),
+            public_base_url=os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
+            google_webhook_token=os.getenv("GOOGLE_WEBHOOK_TOKEN", ""),
+            notion_webhook_verification_token=os.getenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", ""),
             github_webhook_secret=os.getenv("GITHUB_WEBHOOK_SECRET", ""),
             sync_secret=os.getenv("SYNC_SECRET", ""),
             repo_path=Path(os.getenv("REPO_PATH", base_dir)),
@@ -57,5 +63,12 @@ class Config:
             "GOOGLE_CLIENT_SECRET": self.google_client_secret,
             "GOOGLE_REFRESH_TOKEN": self.google_refresh_token,
             "SYNC_SECRET": self.sync_secret,
+        }
+        return [name for name, value in required.items() if not value]
+
+    def missing_webhook_config(self) -> list[str]:
+        required = {
+            "PUBLIC_BASE_URL": self.public_base_url,
+            "GOOGLE_WEBHOOK_TOKEN": self.google_webhook_token,
         }
         return [name for name, value in required.items() if not value]

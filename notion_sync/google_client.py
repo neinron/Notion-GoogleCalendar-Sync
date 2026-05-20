@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 import requests
 
@@ -88,6 +90,41 @@ class GoogleCalendarClient:
         res = self.session.delete(
             f"{CALENDAR_BASE}/calendars/{self.config.google_calendar_id}/events/{event_id}",
             headers=self._headers(),
+            timeout=30,
+        )
+        if res.status_code not in {200, 204, 404, 410}:
+            res.raise_for_status()
+
+    def watch_events(self) -> dict[str, Any]:
+        if not self.config.public_base_url:
+            raise ValueError("PUBLIC_BASE_URL is required for Google Calendar watch registration")
+        if not self.config.google_webhook_token:
+            raise ValueError("GOOGLE_WEBHOOK_TOKEN is required for Google Calendar watch registration")
+
+        expiration_ms = int((datetime.now(timezone.utc) + timedelta(days=6)).timestamp() * 1000)
+        body = {
+            "id": str(uuid4()),
+            "type": "web_hook",
+            "address": f"{self.config.public_base_url}/webhooks/google",
+            "token": self.config.google_webhook_token,
+            "expiration": expiration_ms,
+        }
+        res = self.session.post(
+            f"{CALENDAR_BASE}/calendars/{self.config.google_calendar_id}/events/watch",
+            headers=self._headers(),
+            json=body,
+            timeout=30,
+        )
+        res.raise_for_status()
+        return res.json()
+
+    def stop_channel(self, channel_id: str, resource_id: str) -> None:
+        if not channel_id or not resource_id:
+            return
+        res = self.session.post(
+            f"{CALENDAR_BASE}/channels/stop",
+            headers=self._headers(),
+            json={"id": channel_id, "resourceId": resource_id},
             timeout=30,
         )
         if res.status_code not in {200, 204, 404, 410}:

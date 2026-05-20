@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import time
 from pathlib import Path
@@ -43,3 +45,11 @@ def require_token(request, expected: str):
     if supplied != expected:
         return jsonify({"ok": False, "error": "invalid sync token"}), 403
     return None
+
+
+def constant_time_equal(left: str, right: str) -> bool:
+    return hmac.compare_digest((left or "").encode("utf-8"), (right or "").encode("utf-8"))
+
+
+def hmac_sha256_signature(secret: str, body: bytes) -> str:
+    return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()

@@ -28,6 +28,9 @@ def cfg(tmp: Path) -> Config:
         google_client_id="cid",
         google_client_secret="secret",
         google_refresh_token="refresh",
+        public_base_url="https://example.com",
+        google_webhook_token="google-token",
+        notion_webhook_verification_token="notion-token",
         github_webhook_secret="hook-secret",
         sync_secret="sync-secret",
         repo_path=tmp,
@@ -79,6 +82,35 @@ class RouteDeployTests(unittest.TestCase):
             self.assertEqual(res.status_code, 200)
             self.assertEqual(run.call_count, 3)
             self.assertTrue((tmp / "wsgi.py").exists())
+
+    def test_google_webhook_rejects_bad_token(self):
+        with tempfile.TemporaryDirectory() as d:
+            client = create_app(cfg(Path(d))).test_client()
+            res = client.post("/webhooks/google", headers={"X-Goog-Channel-Token": "bad"})
+            self.assertEqual(res.status_code, 403)
+
+    def test_google_sync_notification_is_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            client = create_app(cfg(Path(d))).test_client()
+            res = client.post(
+                "/webhooks/google",
+                headers={"X-Goog-Channel-Token": "google-token", "X-Goog-Resource-State": "sync"},
+            )
+            self.assertEqual(res.status_code, 202)
+            self.assertTrue(res.get_json()["ignored"])
+
+    def test_notion_verification_token_acknowledged(self):
+        with tempfile.TemporaryDirectory() as d:
+            client = create_app(cfg(Path(d))).test_client()
+            res = client.post("/webhooks/notion", json={"verification_token": "secret_test"})
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.get_json()["verification_token_received"])
+
+    def test_notion_webhook_rejects_bad_signature(self):
+        with tempfile.TemporaryDirectory() as d:
+            client = create_app(cfg(Path(d))).test_client()
+            res = client.post("/webhooks/notion", json={"events": []}, headers={"X-Notion-Signature": "sha256=bad"})
+            self.assertEqual(res.status_code, 403)
 
 
 if __name__ == "__main__":

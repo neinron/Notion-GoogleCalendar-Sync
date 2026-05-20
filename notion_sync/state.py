@@ -36,6 +36,29 @@ class SyncState:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS webhook_channels (
+                    channel_id TEXT PRIMARY KEY,
+                    resource_id TEXT NOT NULL DEFAULT '',
+                    resource_uri TEXT NOT NULL DEFAULT '',
+                    calendar_id TEXT NOT NULL DEFAULT '',
+                    expiration TEXT NOT NULL DEFAULT '',
+                    token_hint TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
             conn.commit()
         finally:
             conn.close()
@@ -131,6 +154,81 @@ class SyncState:
         finally:
             conn.close()
         return [self._record(row) for row in rows]
+
+    def upsert_webhook_channel(
+        self,
+        *,
+        channel_id: str,
+        resource_id: str,
+        resource_uri: str,
+        calendar_id: str,
+        expiration: str,
+        token_hint: str = "",
+    ) -> None:
+        now = utc_now_iso()
+        conn = self.connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO webhook_channels (
+                    channel_id, resource_id, resource_uri, calendar_id, expiration,
+                    token_hint, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    resource_id = excluded.resource_id,
+                    resource_uri = excluded.resource_uri,
+                    calendar_id = excluded.calendar_id,
+                    expiration = excluded.expiration,
+                    token_hint = excluded.token_hint,
+                    updated_at = excluded.updated_at
+                """,
+                (channel_id, resource_id, resource_uri, calendar_id, expiration, token_hint, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def list_webhook_channels(self) -> list[dict[str, Any]]:
+        conn = self.connect()
+        try:
+            rows = conn.execute("SELECT * FROM webhook_channels ORDER BY updated_at DESC").fetchall()
+        finally:
+            conn.close()
+        return [dict(row) for row in rows]
+
+    def get_webhook_channel(self, channel_id: str) -> dict[str, Any] | None:
+        conn = self.connect()
+        try:
+            row = conn.execute("SELECT * FROM webhook_channels WHERE channel_id = ?", (channel_id,)).fetchone()
+        finally:
+            conn.close()
+        return dict(row) if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        conn = self.connect()
+        try:
+            conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, utc_now_iso()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_setting(self, key: str) -> str:
+        conn = self.connect()
+        try:
+            row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        finally:
+            conn.close()
+        return row["value"] if row else ""
 
     @staticmethod
     def _record(row: sqlite3.Row) -> SyncRecord:

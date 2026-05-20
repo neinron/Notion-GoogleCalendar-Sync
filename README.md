@@ -25,6 +25,8 @@ GOOGLE_CLIENT_SECRET=...
 GOOGLE_REFRESH_TOKEN=...
 
 SYNC_SECRET=long-random-secret
+PUBLIC_BASE_URL=https://<user>.pythonanywhere.com
+GOOGLE_WEBHOOK_TOKEN=long-random-secret
 GITHUB_WEBHOOK_SECRET=long-random-secret
 ```
 
@@ -37,6 +39,7 @@ WSGI_FILE=/var/www/<user>_pythonanywhere_com_wsgi.py
 REPO_PATH=/home/<user>/Notion-Calendar-Sync
 DEPLOY_BRANCH=main
 PYTHON_BIN=/home/<user>/.virtualenvs/notion-sync/bin/python
+NOTION_WEBHOOK_VERIFICATION_TOKEN=secret_from_notion_after_subscription_probe
 ```
 
 ## Local Development
@@ -88,6 +91,13 @@ python -m unittest discover -s tests
    curl -fsS "https://<user>.pythonanywhere.com/sync?token=$SYNC_SECRET"
    ```
 
+On PythonAnywhere Free, a daily scheduled task is still useful even with webhooks. Use it to renew the Google watch channel and run a safety sync:
+
+```bash
+curl -fsS "https://<user>.pythonanywhere.com/google/watch/renew?token=<SYNC_SECRET>"
+curl -fsS "https://<user>.pythonanywhere.com/sync?token=<SYNC_SECRET>"
+```
+
 ## GitHub Auto-Deploy
 
 Add a GitHub webhook:
@@ -110,4 +120,37 @@ The deploy route:
 - `GET /health`: configuration and state health.
 - `GET|POST /sync?token=...`: run one sync.
 - `GET /conflicts?token=...`: list unresolved conflicts.
+- `POST /webhooks/google`: Google Calendar push notification receiver.
+- `POST /webhooks/notion`: Notion webhook receiver.
+- `GET|POST /google/watch/renew?token=...`: replace the Google Calendar events watch channel.
+- `GET /webhook-channels?token=...`: list registered Google watch channels.
 - `POST /update`: GitHub deploy webhook.
+
+## Notion And Google Webhooks
+
+### Google Calendar
+
+1. Set `PUBLIC_BASE_URL` and `GOOGLE_WEBHOOK_TOKEN`.
+2. Reload the PythonAnywhere web app.
+3. Register or renew the channel:
+
+   ```bash
+   curl -fsS "https://<user>.pythonanywhere.com/google/watch/renew?token=<SYNC_SECRET>"
+   ```
+
+4. Google sends `sync` notifications first; the app acknowledges those without running a sync.
+5. Later `exists` notifications run the normal sync engine.
+
+Google watch channels expire. Renew them daily or whenever `/webhook-channels` shows an old expiration.
+
+### Notion
+
+1. In the Notion integration settings, create a webhook subscription pointing to:
+
+   ```text
+   https://<user>.pythonanywhere.com/webhooks/notion
+   ```
+
+2. Notion will POST a one-time `verification_token`. The app stores it in SQLite automatically. You can also paste that token into `NOTION_WEBHOOK_VERIFICATION_TOKEN` and reload the web app if you prefer env-only configuration.
+3. Verify the subscription in Notion.
+4. Future Notion webhook payloads must include a matching `X-Notion-Signature`; otherwise the app rejects them.
