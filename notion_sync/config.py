@@ -13,6 +13,7 @@ class Config:
     google_client_id: str
     google_client_secret: str
     google_refresh_token: str
+    google_time_zone: str
     public_base_url: str
     google_webhook_token: str
     notion_webhook_verification_token: str
@@ -40,6 +41,7 @@ class Config:
             google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
             google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", ""),
             google_refresh_token=os.getenv("GOOGLE_REFRESH_TOKEN", ""),
+            google_time_zone=os.getenv("GOOGLE_TIME_ZONE", "Europe/Berlin"),
             public_base_url=os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
             google_webhook_token=os.getenv("GOOGLE_WEBHOOK_TOKEN", ""),
             notion_webhook_verification_token=os.getenv("NOTION_WEBHOOK_VERIFICATION_TOKEN", ""),

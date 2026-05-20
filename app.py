@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -46,6 +47,17 @@ def create_app(config: Config | None = None) -> Flask:
             result = build_engine().sync()
         logger.info("sync trigger=%s result=%s", trigger, result)
         return result
+
+    def start_background_sync(trigger: str) -> None:
+        def target() -> None:
+            try:
+                run_locked_sync(trigger)
+            except RuntimeError as exc:
+                logger.info("sync trigger=%s skipped: %s", trigger, exc)
+            except Exception:
+                logger.exception("sync trigger=%s failed", trigger)
+
+        threading.Thread(target=target, daemon=True, name=f"sync-{trigger}").start()
 
     @app.route("/")
     def index():
@@ -94,7 +106,8 @@ def create_app(config: Config | None = None) -> Flask:
         logger.info("google webhook state=%s channel=%s resource=%s", resource_state, channel_id, resource_id)
         if resource_state == "sync":
             return jsonify({"ok": True, "ignored": True, "reason": "channel sync notification"}), 202
-        return jsonify(run_locked_sync("google-webhook"))
+        start_background_sync("google-webhook")
+        return jsonify({"ok": True, "accepted": True}), 200
 
     @app.route("/webhooks/notion", methods=["POST"])
     def notion_webhook():
@@ -118,7 +131,8 @@ def create_app(config: Config | None = None) -> Flask:
 
         event_count = len(payload.get("events", [])) if isinstance(payload.get("events"), list) else 0
         logger.info("notion webhook events=%s", event_count)
-        return jsonify(run_locked_sync("notion-webhook"))
+        start_background_sync("notion-webhook")
+        return jsonify({"ok": True, "accepted": True}), 200
 
     @app.route("/google/watch/renew", methods=["POST", "GET"])
     def renew_google_watch():

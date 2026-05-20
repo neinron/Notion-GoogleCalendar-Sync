@@ -15,6 +15,13 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 CALENDAR_BASE = "https://www.googleapis.com/calendar/v3"
 
 
+class GoogleCalendarError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int, response_body: str):
+        super().__init__(f"{message}: {status_code} {response_body}")
+        self.status_code = status_code
+        self.response_body = response_body
+
+
 class GoogleCalendarClient:
     def __init__(self, config: Config, session: requests.Session | None = None):
         self.config = config
@@ -83,7 +90,12 @@ class GoogleCalendarClient:
             json=body,
             timeout=30,
         )
-        res.raise_for_status()
+        if not res.ok:
+            raise GoogleCalendarError(
+                "Google Calendar event update failed",
+                status_code=res.status_code,
+                response_body=res.text,
+            )
         return parse_google_event(res.json())
 
     def delete_event(self, event_id: str) -> None:

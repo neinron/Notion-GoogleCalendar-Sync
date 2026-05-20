@@ -28,6 +28,7 @@ def cfg(tmp: Path) -> Config:
         google_client_id="cid",
         google_client_secret="secret",
         google_refresh_token="refresh",
+        google_time_zone="Europe/Berlin",
         public_base_url="https://example.com",
         google_webhook_token="google-token",
         notion_webhook_verification_token="notion-token",

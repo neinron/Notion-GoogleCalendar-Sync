@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from .config import Config
-from .google_client import GoogleCalendarClient
+from .google_client import GoogleCalendarClient, GoogleCalendarError
 from .models import GoogleEvent, NotionTask
 from .notion_client import NotionClient
 from .serialize import google_event_to_notion_properties, google_hash, notion_hash, notion_task_to_google_body
@@ -106,7 +106,7 @@ class SyncEngine:
             return
 
         if not event:
-            created = self.google.create_event(notion_task_to_google_body(task))
+            created = self.google.create_event(notion_task_to_google_body(task, time_zone=self.config.google_time_zone))
             self.state.upsert(
                 task.page_id,
                 google_event_id=created.event_id,
@@ -123,8 +123,11 @@ class SyncEngine:
         google_changed = bool(record and record.last_google_hash and record.last_google_hash != current_google_hash)
 
         if notion_changed and google_changed:
-            self.state.mark_conflict(task.page_id, event.event_id, "Notion and Google both changed since last sync")
-            stats["conflicts"] += 1
+            self.logger.warning(
+                "Notion and Google both changed for %s; applying Notion as source of truth",
+                task.page_id,
+            )
+            self._update_google_from_notion(task, event, current_notion_hash, stats)
             return
 
         if google_changed and not notion_changed:
@@ -141,7 +144,7 @@ class SyncEngine:
             stats["updated_notion"] += 1
             return
 
-        desired_google_body = notion_task_to_google_body(task)
+        desired_google_body = notion_task_to_google_body(task, time_zone=self.config.google_time_zone)
         desired_event = GoogleEvent(
             event_id=event.event_id,
             notion_page_id=task.page_id,
@@ -155,16 +158,7 @@ class SyncEngine:
             raw={},
         )
         if notion_changed or google_hash(desired_event) != current_google_hash:
-            updated = self.google.update_event(event.event_id, desired_google_body)
-            self.state.upsert(
-                task.page_id,
-                google_event_id=updated.event_id,
-                last_notion_hash=current_notion_hash,
-                last_google_hash=google_hash(updated),
-                last_notion_edited_time=task.last_edited_time,
-                last_google_updated=updated.updated,
-            )
-            stats["updated_google"] += 1
+            self._update_google_from_notion(task, event, current_notion_hash, stats)
             return
 
         self.state.upsert(
@@ -176,3 +170,36 @@ class SyncEngine:
             last_google_updated=event.updated,
         )
         stats["skipped"] += 1
+
+    def _update_google_from_notion(
+        self,
+        task: NotionTask,
+        event: GoogleEvent,
+        current_notion_hash: str,
+        stats: dict[str, int],
+    ) -> None:
+        desired_google_body = notion_task_to_google_body(task, time_zone=self.config.google_time_zone)
+        try:
+            updated = self.google.update_event(event.event_id, desired_google_body)
+        except GoogleCalendarError as exc:
+            if exc.status_code != 400:
+                raise
+            self.logger.warning(
+                "Google update failed with 400 for Notion page %s event %s; response=%s; recreating event from Notion",
+                task.page_id,
+                event.event_id,
+                exc.response_body,
+            )
+            self.google.delete_event(event.event_id)
+            updated = self.google.create_event(desired_google_body)
+        self.state.upsert(
+            task.page_id,
+            google_event_id=updated.event_id,
+            last_notion_hash=current_notion_hash,
+            last_google_hash=google_hash(updated),
+            last_notion_edited_time=task.last_edited_time,
+            last_google_updated=updated.updated,
+            sync_status="synced",
+            last_error="",
+        )
+        stats["updated_google"] += 1

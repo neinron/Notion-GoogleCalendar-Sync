@@ -5,8 +5,9 @@ import unittest
 from pathlib import Path
 
 from notion_sync.config import Config
+from notion_sync.google_client import GoogleCalendarError
 from notion_sync.models import GoogleEvent, NotionTask
-from notion_sync.serialize import event_description, google_hash, notion_hash
+from notion_sync.serialize import event_description, google_hash, notion_hash, notion_task_to_google_body
 from notion_sync.state import SyncState
 from notion_sync.sync_engine import SyncEngine
 
@@ -19,6 +20,7 @@ def cfg(tmp: Path) -> Config:
         google_client_id="cid",
         google_client_secret="secret",
         google_refresh_token="refresh",
+        google_time_zone="Europe/Berlin",
         public_base_url="https://example.com",
         google_webhook_token="google-token",
         notion_webhook_verification_token="notion-token",
@@ -32,7 +34,7 @@ def cfg(tmp: Path) -> Config:
     )
 
 
-def task(page_id: str = "page1", *, do_start: str = "2026-05-21T10:00:00+02:00", status: str = "not started", edited: str = "n1", title: str = "Task") -> NotionTask:
+def task(page_id: str = "page1", *, do_start: str = "2026-05-21T10:00:00+02:00", do_end: str | None = "2026-05-21T11:00:00+02:00", status: str = "not started", edited: str = "n1", title: str = "Task") -> NotionTask:
     return NotionTask(
         page_id=page_id,
         url=f"https://notion.so/{page_id}",
@@ -43,7 +45,7 @@ def task(page_id: str = "page1", *, do_start: str = "2026-05-21T10:00:00+02:00",
         course="course1",
         due_start="2026-05-22",
         do_start=do_start,
-        do_end="2026-05-21T11:00:00+02:00" if do_start else "",
+        do_end=do_end if do_end is not None else "",
         do_is_datetime=bool(do_start),
         last_edited_time=edited,
         raw={},
@@ -84,8 +86,9 @@ class FakeNotion:
 
 
 class FakeGoogle:
-    def __init__(self, events):
+    def __init__(self, events, *, fail_update_400: bool = False):
         self.events = events
+        self.fail_update_400 = fail_update_400
         self.created = []
         self.updated = []
         self.deleted = []
@@ -99,6 +102,8 @@ class FakeGoogle:
 
     def update_event(self, event_id, body):
         self.updated.append((event_id, body))
+        if self.fail_update_400:
+            raise GoogleCalendarError("bad request", status_code=400, response_body='{"error":"invalid end"}')
         return event(event_id=event_id, updated="g2", title=body["summary"])
 
     def delete_event(self, event_id):
@@ -106,11 +111,11 @@ class FakeGoogle:
 
 
 class SyncEngineTests(unittest.TestCase):
-    def build(self, tmp: Path, tasks, events):
+    def build(self, tmp: Path, tasks, events, *, fail_update_400: bool = False):
         conf = cfg(tmp)
         state = SyncState(conf.state_db_path)
         notion = FakeNotion(tasks)
-        google = FakeGoogle(events)
+        google = FakeGoogle(events, fail_update_400=fail_update_400)
         engine = SyncEngine(conf, state, notion, google)
         return engine, state, notion, google
 
@@ -143,7 +148,7 @@ class SyncEngineTests(unittest.TestCase):
             self.assertEqual(result["updated_notion"], 1)
             self.assertEqual(notion.updated[0][0], "page1")
 
-    def test_simultaneous_change_creates_conflict(self):
+    def test_simultaneous_change_uses_notion_as_source_of_truth(self):
         with tempfile.TemporaryDirectory() as d:
             old_task = task()
             old_event = event()
@@ -152,9 +157,10 @@ class SyncEngineTests(unittest.TestCase):
             engine, state, _, google = self.build(Path(d), [new_task], [new_event])
             state.upsert("page1", google_event_id="event1", last_notion_hash=notion_hash(old_task), last_google_hash=google_hash(old_event), last_notion_edited_time=old_task.last_edited_time, last_google_updated=old_event.updated)
             result = engine.sync()
-            self.assertEqual(result["conflicts"], 1)
-            self.assertEqual(state.get("page1").sync_status, "conflict")
-            self.assertEqual(google.updated, [])
+            self.assertEqual(result["conflicts"], 0)
+            self.assertEqual(result["updated_google"], 1)
+            self.assertEqual(state.get("page1").sync_status, "synced")
+            self.assertEqual(google.updated[0][1]["summary"], "Changed in Notion")
 
     def test_google_delete_clears_notion_do_date(self):
         with tempfile.TemporaryDirectory() as d:
@@ -169,6 +175,34 @@ class SyncEngineTests(unittest.TestCase):
             result = engine.sync()
             self.assertEqual(result["deleted_google"], 1)
             self.assertEqual(google.deleted, ["event1"])
+
+    def test_date_only_without_end_gets_one_day_google_end(self):
+        body = notion_task_to_google_body(task(do_start="2026-05-21", do_end=None))
+        self.assertEqual(body["start"], {"date": "2026-05-21"})
+        self.assertEqual(body["end"], {"date": "2026-05-22"})
+
+    def test_datetime_without_end_gets_one_hour_google_end(self):
+        body = notion_task_to_google_body(task(do_start="2026-05-21T10:00:00+02:00", do_end=None))
+        self.assertEqual(body["start"], {"dateTime": "2026-05-21T10:00:00+02:00"})
+        self.assertEqual(body["end"], {"dateTime": "2026-05-21T11:00:00+02:00"})
+
+    def test_datetime_without_timezone_adds_configured_timezone(self):
+        body = notion_task_to_google_body(task(do_start="2026-05-21T10:00:00", do_end=None), time_zone="Europe/Berlin")
+        self.assertEqual(body["start"], {"dateTime": "2026-05-21T10:00:00", "timeZone": "Europe/Berlin"})
+        self.assertEqual(body["end"], {"dateTime": "2026-05-21T11:00:00", "timeZone": "Europe/Berlin"})
+
+    def test_google_update_400_recreates_event_from_notion(self):
+        with tempfile.TemporaryDirectory() as d:
+            t = task(title="Changed in Notion", edited="n2")
+            old = event()
+            existing = event(title="Old Google", updated="g1")
+            engine, state, _, google = self.build(Path(d), [t], [existing], fail_update_400=True)
+            state.upsert("page1", google_event_id="event1", last_notion_hash=notion_hash(task()), last_google_hash=google_hash(old), last_notion_edited_time="n1", last_google_updated="g1")
+            result = engine.sync()
+            self.assertEqual(result["updated_google"], 1)
+            self.assertEqual(google.deleted, ["event1"])
+            self.assertEqual(len(google.created), 1)
+            self.assertEqual(state.get("page1").google_event_id, "created")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .models import GoogleEvent, NotionTask
@@ -95,16 +95,57 @@ def event_description(task: NotionTask) -> str:
     return "\n".join(parts)
 
 
+def _parse_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def has_explicit_timezone(value: str) -> bool:
+    if value.endswith("Z"):
+        return True
+    time_part = value.split("T", 1)[1] if "T" in value else ""
+    return "+" in time_part or "-" in time_part
+
+
 def default_end(start: str) -> str:
     if not start:
         return ""
     if "T" not in start:
+        parsed = _parse_date(start)
+        return (parsed + timedelta(days=1)).isoformat() if parsed else start
+    dt = _parse_datetime(start)
+    if not dt:
         return start
-    dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
     return (dt + timedelta(hours=1)).isoformat()
 
 
-def notion_task_to_google_body(task: NotionTask) -> dict[str, Any]:
+def normalized_end(start: str, end: str) -> str:
+    fallback = default_end(start)
+    if not start or not end:
+        return fallback
+    if "T" not in start:
+        start_date = _parse_date(start)
+        end_date = _parse_date(end)
+        if not start_date or not end_date or end_date <= start_date:
+            return fallback
+        return end
+    start_dt = _parse_datetime(start)
+    end_dt = _parse_datetime(end)
+    if not start_dt or not end_dt or end_dt <= start_dt:
+        return fallback
+    return end
+
+
+def notion_task_to_google_body(task: NotionTask, *, time_zone: str = "Europe/Berlin") -> dict[str, Any]:
     is_all_day = bool(task.do_start and "T" not in task.do_start)
     start_key = "date" if is_all_day else "dateTime"
     body = {
@@ -114,7 +155,10 @@ def notion_task_to_google_body(task: NotionTask) -> dict[str, Any]:
     }
     if task.do_start:
         body["start"] = {start_key: task.do_start}
-        body["end"] = {start_key: task.do_end or default_end(task.do_start)}
+        body["end"] = {start_key: normalized_end(task.do_start, task.do_end)}
+        if not is_all_day and not has_explicit_timezone(task.do_start):
+            body["start"]["timeZone"] = time_zone
+            body["end"]["timeZone"] = time_zone
     return body
 
 
