@@ -47,7 +47,6 @@ class GoogleCalendarClient:
                 "singleEvents": "true",
                 "showDeleted": "true",
                 "maxResults": 2500,
-                "privateExtendedProperty": "notion_page_id",
             }
             if page_token:
                 params["pageToken"] = page_token
