@@ -26,8 +26,7 @@ class SyncEngine:
         self.notion = notion
         self.google = google
         self.logger = logger or logging.getLogger(__name__)
-
-    def sync(self) -> dict[str, Any]:
+    def sync(self, limit: int = 25) -> dict[str, Any]:
         tasks = {task.page_id: task for task in self.notion.list_tasks()}
         events = {event.notion_page_id: event for event in self.google.list_events()}
         stats = {
@@ -40,8 +39,14 @@ class SyncEngine:
             "conflicts": 0,
             "skipped": 0,
         }
+        processed = 0
 
         for page_id, task in tasks.items():
+            if processed >= limit:
+                stats["has_more"] = True
+                break
+
+            processed += 1
             try:
                 event = events.get(page_id)
                 self._sync_task(task, event, stats)
