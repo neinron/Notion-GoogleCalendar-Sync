@@ -78,12 +78,19 @@ def create_app(config: Config | None = None) -> Flask:
         ), 200 if not missing else 503
 
     @app.route("/sync", methods=["POST", "GET"])
+    @app.route("/sync", methods=["POST", "GET"])
     def sync():
         token_error = require_token(request, cfg.sync_secret)
         if token_error:
             return token_error
-        return jsonify(run_locked_sync("manual"))
 
+        limit = int(request.args.get("limit", "25"))
+
+        with FileLock(cfg.sync_lock_path):
+            result = build_engine().sync(limit=limit)
+
+        logger.info("sync trigger=%s limit=%s result=%s", "manual", limit, result)
+        return jsonify(result)
     @app.route("/conflicts")
     def conflicts():
         token_error = require_token(request, cfg.sync_secret)
