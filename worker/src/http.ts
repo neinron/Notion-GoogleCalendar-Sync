@@ -30,17 +30,28 @@ export function requireToken(request: Request, env: Env): Response | null {
   return constantTimeEqual(supplied, env.SYNC_SECRET) ? null : json({ ok: false, error: "invalid sync token" }, 403);
 }
 
-export async function runSync(env: Env): Promise<Response> {
+export async function runSync(env: Env, request?: Request): Promise<Response> {
   const missing = missingRequired(env);
   if (missing.length) return json({ ok: false, missing }, 503);
+
+  const url = request ? new URL(request.url) : null;
+  const rawLimit = url?.searchParams.get("limit");
+  const limit = rawLimit ? Number(rawLimit) : 25;
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return json({ ok: false, error: "invalid limit", allowed: "1-100" }, 400);
+  }
+
   const state = new D1State(env.DB);
   const owner = crypto.randomUUID();
+
   if (!(await state.acquireLock("sync_lock", owner))) {
     return json({ ok: false, error: "sync already running" }, 423);
   }
+
   try {
     const engine = new SyncEngine(state, new NotionClient(env), new GoogleCalendarClient(env));
-    return json(await engine.sync());
+    return json(await engine.sync({ limit }));
   } finally {
     await state.releaseLock("sync_lock", owner);
   }

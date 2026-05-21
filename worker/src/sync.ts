@@ -17,7 +17,10 @@ export class SyncEngine {
     private readonly google: GoogleCalendarClient,
   ) {}
 
-  async sync(): Promise<SyncStats> {
+  async sync(options: { limit?: number } = {}): Promise<SyncStats> {
+    const limit = options.limit ?? 25;
+    let processed = 0;
+
     const tasks = new Map((await this.notion.listTasks()).map((task) => [task.pageId, task]));
     const events = new Map((await this.google.listEvents()).map((event) => [event.notionPageId, event]));
     const stats: SyncStats = {
@@ -32,6 +35,13 @@ export class SyncEngine {
     };
 
     for (const [pageId, task] of tasks) {
+      if (processed >= limit) {
+        stats.has_more = true;
+        break;
+      }
+
+      processed += 1;
+
       try {
         await this.syncTask(task, events.get(pageId) ?? null, stats);
       } catch (error) {
@@ -40,10 +50,12 @@ export class SyncEngine {
       }
     }
 
-    for (const [pageId, event] of events) {
-      if (!tasks.has(pageId) && event.status !== "cancelled") {
-        await this.google.deleteEvent(event.eventId);
-        stats.deleted_google += 1;
+    if (!stats.has_more) {
+      for (const [pageId, event] of events) {
+        if (!tasks.has(pageId) && event.status !== "cancelled") {
+          await this.google.deleteEvent(event.eventId);
+          stats.deleted_google += 1;
+        }
       }
     }
 

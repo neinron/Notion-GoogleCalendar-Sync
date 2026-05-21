@@ -64,4 +64,5 @@ export interface SyncStats {
   cleared_notion_dates: number;
   conflicts: number;
   skipped: number;
+  has_more?: boolean;
 }

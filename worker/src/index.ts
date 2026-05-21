@@ -27,7 +27,7 @@ export default {
     if (url.pathname === "/sync" && ["GET", "POST"].includes(request.method)) {
       const tokenError = requireToken(request, env);
       if (tokenError) return tokenError;
-      return await runSync(env);
+      return await runSync(env, request);
     }
 
     if (url.pathname === "/conflicts" && request.method === "GET") {
