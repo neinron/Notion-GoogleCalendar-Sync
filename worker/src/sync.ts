@@ -18,49 +18,69 @@ export class SyncEngine {
   ) {}
 
   async sync(options: { limit?: number } = {}): Promise<SyncStats> {
-    const limit = options.limit ?? 25;
-    let processed = 0;
+  const limit = options.limit ?? 25;
+  let processed = 0;
+  let lastProcessedPageId: string | null = null;
 
-    const tasks = new Map((await this.notion.listTasks()).map((task) => [task.pageId, task]));
-    const events = new Map((await this.google.listEvents()).map((event) => [event.notionPageId, event]));
-    const stats: SyncStats = {
-      ok: true,
-      created: 0,
-      updated_google: 0,
-      updated_notion: 0,
-      deleted_google: 0,
-      cleared_notion_dates: 0,
-      conflicts: 0,
-      skipped: 0,
-    };
+  const cursor = await this.state.getSetting("sync_cursor");
+  let cursorSeen = !cursor;
 
-    for (const [pageId, task] of tasks) {
-      if (processed >= limit) {
-        stats.has_more = true;
-        break;
-      }
+  const tasks = new Map((await this.notion.listTasks()).map((task) => [task.pageId, task]));
+  const events = new Map((await this.google.listEvents()).map((event) => [event.notionPageId, event]));
 
-      processed += 1;
+  const stats: SyncStats = {
+    ok: true,
+    created: 0,
+    updated_google: 0,
+    updated_notion: 0,
+    deleted_google: 0,
+    cleared_notion_dates: 0,
+    conflicts: 0,
+    skipped: 0,
+  };
 
-      try {
-        await this.syncTask(task, events.get(pageId) ?? null, stats);
-      } catch (error) {
-        await this.state.markConflict(pageId, events.get(pageId)?.eventId ?? null, error instanceof Error ? error.message : String(error));
-        stats.conflicts += 1;
-      }
+  for (const [pageId, task] of tasks) {
+    if (!cursorSeen) {
+      if (pageId === cursor) cursorSeen = true;
+      continue;
     }
 
-    if (!stats.has_more) {
-      for (const [pageId, event] of events) {
-        if (!tasks.has(pageId) && event.status !== "cancelled") {
-          await this.google.deleteEvent(event.eventId);
-          stats.deleted_google += 1;
-        }
+    if (processed >= limit) {
+      stats.has_more = true;
+      if (lastProcessedPageId) {
+        await this.state.setSetting("sync_cursor", lastProcessedPageId);
       }
+      break;
     }
 
-    return stats;
+    processed += 1;
+    lastProcessedPageId = pageId;
+
+    try {
+      await this.syncTask(task, events.get(pageId) ?? null, stats);
+    } catch (error) {
+      await this.state.markConflict(
+        pageId,
+        events.get(pageId)?.eventId ?? null,
+        error instanceof Error ? error.message : String(error),
+      );
+      stats.conflicts += 1;
+    }
   }
+
+  if (!stats.has_more) {
+    await this.state.deleteSetting("sync_cursor");
+
+    for (const [pageId, event] of events) {
+      if (!tasks.has(pageId) && event.status !== "cancelled") {
+        await this.google.deleteEvent(event.eventId);
+        stats.deleted_google += 1;
+      }
+    }
+  }
+
+  return stats;
+}
 
   private async syncTask(task: NotionTask, event: GoogleEvent | null, stats: SyncStats): Promise<void> {
     const record = await this.state.get(task.pageId);
