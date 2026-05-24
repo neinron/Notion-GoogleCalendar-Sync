@@ -204,6 +204,13 @@ class SyncEngineTests(unittest.TestCase):
             self.assertEqual(len(google.created), 1)
             self.assertEqual(state.get("page1").google_event_id, "created")
 
+    def test_existing_google_event_is_deleted_when_notion_task_is_filtered_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            engine, _, _, google = self.build(Path(d), [], [event(page_id="old-course-task")])
+            result = engine.sync()
+            self.assertEqual(result["deleted_google"], 1)
+            self.assertEqual(google.deleted, ["event1"])
+
 
 if __name__ == "__main__":
     unittest.main()

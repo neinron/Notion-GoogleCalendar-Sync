@@ -46,10 +46,23 @@ class FakeState {
   constructor(record = null) {
     this.record = record;
     this.conflicts = [];
+    this.settings = new Map();
   }
 
   async get() {
     return this.record;
+  }
+
+  async getSetting(key) {
+    return this.settings.get(key) ?? "";
+  }
+
+  async setSetting(key, value) {
+    this.settings.set(key, value);
+  }
+
+  async deleteSetting(key) {
+    this.settings.delete(key);
   }
 
   async upsert(notionPageId, data) {
@@ -163,4 +176,13 @@ test("Google update 400 deletes and recreates the event from Notion", async () =
   assert.deepEqual(google.deleted, ["event1"]);
   assert.equal(google.created[0].summary, "Changed in Notion");
   assert.equal(state.record.google_event_id, "created");
+});
+
+test("existing Google event is deleted when its Notion task is filtered out", async () => {
+  const state = new FakeState();
+  const google = new FakeGoogle([event({ notionPageId: "old-course-task" })]);
+  const result = await new SyncEngine(state, new FakeNotion([]), google).sync();
+
+  assert.equal(result.deleted_google, 1);
+  assert.deepEqual(google.deleted, ["event1"]);
 });

@@ -9,34 +9,6 @@ export class D1State {
       .bind(notionPageId)
       .first<SyncRecord>();
   }
-  async getSetting(key: string): Promise<string | null> {
-  const row = await this.db
-    .prepare("SELECT value FROM app_settings WHERE key = ?")
-    .bind(key)
-    .first<{ value: string }>();
-
-  return row?.value ?? null;
-}
-
-async setSetting(key: string, value: string): Promise<void> {
-  await this.db
-    .prepare(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES (?, ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET
-         value = excluded.value,
-         updated_at = excluded.updated_at`,
-    )
-    .bind(key, value)
-    .run();
-}
-
-async deleteSetting(key: string): Promise<void> {
-  await this.db
-    .prepare("DELETE FROM app_settings WHERE key = ?")
-    .bind(key)
-    .run();
-}
   async upsert(
     notionPageId: string,
     data: {
@@ -156,6 +128,10 @@ async deleteSetting(key: string): Promise<void> {
       )
       .bind(key, value, utcNow())
       .run();
+  }
+
+  async deleteSetting(key: string): Promise<void> {
+    await this.db.prepare("DELETE FROM app_settings WHERE key = ?").bind(key).run();
   }
 
   async acquireLock(key: string, owner: string, ttlSeconds = 300): Promise<boolean> {

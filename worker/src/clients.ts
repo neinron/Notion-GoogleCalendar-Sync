@@ -33,7 +33,36 @@ export class NotionClient {
       cursor = data.has_more ? data.next_cursor || "" : "";
       if (data.has_more && !cursor) throw new Error("Notion query has_more without next_cursor");
     } while (cursor);
-    return results.map(parseNotionTask);
+    const tasks = results.map(parseNotionTask);
+    return await this.onlyRegisteredCourseTasks(tasks);
+  }
+
+  private async onlyRegisteredCourseTasks(tasks: NotionTask[]): Promise<NotionTask[]> {
+    const courseIds = [...new Set(tasks.flatMap((task) => task.course.split(",").filter(Boolean)))];
+    if (!courseIds.length) return [];
+    const registeredCourseIds = await this.registeredCourseIds(courseIds);
+    return tasks.filter((task) => task.course.split(",").some((courseId) => registeredCourseIds.has(courseId)));
+  }
+
+  private async registeredCourseIds(courseIds: string[]): Promise<Set<string>> {
+    const registered = new Set<string>();
+    await Promise.all(
+      courseIds.map(async (courseId) => {
+        const page = await this.retrievePage(courseId);
+        if (page?.properties?.Registered?.checkbox === true) {
+          registered.add(courseId);
+        }
+      }),
+    );
+    return registered;
+  }
+
+  private async retrievePage(pageId: string): Promise<any> {
+    const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
+      headers: this.headers(),
+    });
+    await assertOk(res, "Notion page retrieval failed");
+    return await res.json();
   }
 
   async updatePageProperties(pageId: string, properties: Record<string, unknown>): Promise<any> {

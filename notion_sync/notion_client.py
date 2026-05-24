@@ -41,7 +41,31 @@ class NotionClient:
             cursor = data.get("next_cursor")
             if not cursor:
                 raise RuntimeError("Notion query has_more without next_cursor")
-        return [parse_notion_task(page) for page in results]
+        tasks = [parse_notion_task(page) for page in results]
+        return self._only_registered_course_tasks(tasks)
+
+    def _only_registered_course_tasks(self, tasks: list[NotionTask]) -> list[NotionTask]:
+        course_ids = sorted({course_id for task in tasks for course_id in task.course.split(",") if course_id})
+        if not course_ids:
+            return []
+        registered_course_ids = self._registered_course_ids(course_ids)
+        return [task for task in tasks if any(course_id in registered_course_ids for course_id in task.course.split(","))]
+
+    def _registered_course_ids(self, course_ids: list[str]) -> set[str]:
+        registered: set[str] = set()
+        for course_id in course_ids:
+            page = self.retrieve_page(course_id)
+            if page.get("properties", {}).get("Registered", {}).get("checkbox") is True:
+                registered.add(course_id)
+        return registered
+
+    def retrieve_page(self, page_id: str) -> dict[str, Any]:
+        res = self.session.get(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            timeout=30,
+        )
+        res.raise_for_status()
+        return res.json()
 
     def update_page_properties(self, page_id: str, properties: dict[str, Any]) -> dict[str, Any]:
         res = self.session.patch(

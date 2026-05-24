@@ -17,6 +17,7 @@ The old ICS feed has been removed. Google Calendar now stores real events, and t
 - Moving or editing a synced Google event updates the Notion task.
 - Deleting a Google event does not delete or complete the Notion task; it clears the task's `Do Date`.
 - Completed Notion tasks remove their Google events.
+- Only tasks related to a Notion course page where `Registered` is checked are synced; events for tasks from unregistered courses are removed from Google.
 - If Notion and Google both changed since the last successful sync, Notion wins and the Google event is rebuilt from the Notion task.
 
 ## Cloudflare Worker Runtime
