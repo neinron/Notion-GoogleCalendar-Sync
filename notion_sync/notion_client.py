@@ -55,9 +55,17 @@ class NotionClient:
         registered: set[str] = set()
         for course_id in course_ids:
             page = self.retrieve_page(course_id)
-            if page.get("properties", {}).get("Registered", {}).get("checkbox") is True:
+            if self._course_is_registered(page):
                 registered.add(course_id)
         return registered
+
+    @staticmethod
+    def _course_is_registered(page: dict[str, Any]) -> bool:
+        properties = page.get("properties", {})
+        return (
+            properties.get("Registration", {}).get("checkbox") is True
+            or properties.get("Registered", {}).get("checkbox") is True
+        )
 
     def retrieve_page(self, page_id: str) -> dict[str, Any]:
         res = self.session.get(

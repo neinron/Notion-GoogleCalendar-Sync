@@ -32,7 +32,7 @@ test("Notion client only returns tasks from registered courses", async () => {
       });
     }
     if (String(url).endsWith("/pages/registered-course")) {
-      return Response.json({ properties: { Registered: { checkbox: true } } });
+      return Response.json({ properties: { Registration: { checkbox: true } } });
     }
     if (String(url).endsWith("/pages/old-course")) {
       return Response.json({ properties: { Registered: { checkbox: false } } });

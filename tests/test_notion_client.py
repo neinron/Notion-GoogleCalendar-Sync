@@ -55,7 +55,7 @@ class FakeSession:
     def get(self, url, timeout):
         self.get_urls.append(url)
         if url.endswith("/pages/registered-course"):
-            return FakeResponse({"properties": {"Registered": {"checkbox": True}}})
+            return FakeResponse({"properties": {"Registration": {"checkbox": True}}})
         if url.endswith("/pages/old-course"):
             return FakeResponse({"properties": {"Registered": {"checkbox": False}}})
         raise AssertionError(f"unexpected url {url}")

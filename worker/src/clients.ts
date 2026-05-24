@@ -49,7 +49,7 @@ export class NotionClient {
     await Promise.all(
       courseIds.map(async (courseId) => {
         const page = await this.retrievePage(courseId);
-        if (page?.properties?.Registered?.checkbox === true) {
+        if (courseIsRegistered(page)) {
           registered.add(courseId);
         }
       }),
@@ -78,6 +78,10 @@ export class NotionClient {
   async clearDoDate(pageId: string): Promise<any> {
     return await this.updatePageProperties(pageId, { "Do Date": { date: null } });
   }
+}
+
+function courseIsRegistered(page: any): boolean {
+  return page?.properties?.Registration?.checkbox === true || page?.properties?.Registered?.checkbox === true;
 }
 
 export class GoogleCalendarClient {
