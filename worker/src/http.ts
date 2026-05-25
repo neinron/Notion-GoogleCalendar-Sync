@@ -36,10 +36,10 @@ export async function runSync(env: Env, request?: Request): Promise<Response> {
 
   const url = request ? new URL(request.url) : null;
   const rawLimit = url?.searchParams.get("limit");
-  const limit = rawLimit ? Number(rawLimit) : 25;
+  const limit = rawLimit ? Number(rawLimit) : 250;
 
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-    return json({ ok: false, error: "invalid limit", allowed: "1-100" }, 400);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    return json({ ok: false, error: "invalid limit", allowed: "1-500" }, 400);
   }
 
   const state = new D1State(env.DB);
