@@ -18,14 +18,14 @@ export class SyncEngine {
   ) {}
 
   async sync(options: { limit?: number } = {}): Promise<SyncStats> {
-  const limit = options.limit ?? 25;
+  const limit = options.limit ?? 250;
   let processed = 0;
   let lastProcessedPageId: string | null = null;
 
   const cursor = await this.state.getSetting("sync_cursor");
   let cursorSeen = !cursor;
 
-  const tasks = new Map((await this.notion.listTasks()).map((task) => [task.pageId, task]));
+  const tasks = new Map(prioritizeCalendarTasks(await this.notion.listTasks()).map((task) => [task.pageId, task]));
   const events = new Map((await this.google.listEvents()).map((event) => [event.notionPageId, event]));
 
   const stats: SyncStats = {
@@ -210,4 +210,14 @@ export class SyncEngine {
     });
     stats.updated_google += 1;
   }
+}
+
+function prioritizeCalendarTasks(tasks: NotionTask[]): NotionTask[] {
+  return [...tasks].sort((left, right) => taskPriority(left) - taskPriority(right));
+}
+
+function taskPriority(task: NotionTask): number {
+  if (task.doStart && !isCompleted(task)) return 0;
+  if (!task.doStart && !isCompleted(task)) return 1;
+  return 2;
 }
