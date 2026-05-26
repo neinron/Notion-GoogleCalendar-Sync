@@ -76,6 +76,7 @@ export function parseNotionTask(page: any): NotionTask {
     taskType: selectName(props.Type),
     priority: selectName(props.Priority),
     course: relationIds(props.Course).join(","),
+    courseNames: "",
     googleSyncStatus: selectName(props["Synced with Google"]).toLowerCase(),
     dueStart: typeof dueDate?.start === "string" ? dueDate.start : "",
     doStart,
@@ -93,6 +94,7 @@ export async function notionHash(task: NotionTask): Promise<string> {
     task_type: task.taskType,
     priority: task.priority,
     course: task.course,
+    course_names: task.courseNames,
     google_sync_status: task.googleSyncStatus,
     due_start: task.dueStart,
     do_start: task.doStart,
@@ -105,7 +107,7 @@ export function eventDescription(task: NotionTask): string {
   const parts = [`Notion: ${task.url}`, `Status: ${task.status}`];
   if (task.taskType) parts.push(`Type: ${task.taskType}`);
   if (task.priority) parts.push(`Priority: ${task.priority}`);
-  if (task.course) parts.push(`Course: ${task.course}`);
+  if (task.courseNames || task.course) parts.push(`Course: ${task.courseNames || task.course}`);
   if (task.dueStart) parts.push(`Due Date: ${task.dueStart}`);
   return parts.join("\n");
 }

@@ -34,7 +34,12 @@ test("Notion client returns one task page and can read course registration", asy
       });
     }
     if (String(url).endsWith("/pages/registered-course")) {
-      return Response.json({ properties: { Registration: { checkbox: true } } });
+      return Response.json({
+        properties: {
+          Name: { title: [{ plain_text: "Machine Learning" }] },
+          Registration: { checkbox: true },
+        },
+      });
     }
     if (String(url).endsWith("/pages/old-course")) {
       return Response.json({ properties: { Registered: { checkbox: false } } });
@@ -49,7 +54,7 @@ test("Notion client returns one task page and can read course registration", asy
       DATABASE_ID: "db",
     });
     const page = await client.listTasksPage({ pageSize: 1 });
-    const registered = await client.courseRegistered("registered-course");
+    const metadata = await client.courseMetadata("registered-course");
 
     assert.deepEqual(
       page.tasks.map((task) => task.pageId),
@@ -57,7 +62,7 @@ test("Notion client returns one task page and can read course registration", asy
     );
     assert.equal(page.hasMore, true);
     assert.equal(page.nextCursor, "next-page");
-    assert.equal(registered, true);
+    assert.deepEqual(metadata, { registered: true, name: "Machine Learning" });
     assert(calls.some((url) => url.endsWith("/pages/registered-course")));
   } finally {
     globalThis.fetch = oldFetch;

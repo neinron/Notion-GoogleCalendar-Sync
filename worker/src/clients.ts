@@ -38,8 +38,9 @@ export class NotionClient {
     };
   }
 
-  async courseRegistered(courseId: string): Promise<boolean> {
-    return courseIsRegistered(await this.retrievePage(courseId));
+  async courseMetadata(courseId: string): Promise<{ registered: boolean; name: string }> {
+    const page = await this.retrievePage(courseId);
+    return { registered: courseIsRegistered(page), name: pageTitle(page) };
   }
 
   private async retrievePage(pageId: string): Promise<any> {
@@ -69,6 +70,16 @@ export class NotionClient {
 
 function courseIsRegistered(page: any): boolean {
   return page?.properties?.Registration?.checkbox === true || page?.properties?.Registered?.checkbox === true;
+}
+
+function pageTitle(page: any): string {
+  for (const prop of Object.values(page?.properties ?? {}) as any[]) {
+    if ((prop?.type === "title" || Array.isArray(prop?.title)) && Array.isArray(prop.title)) {
+      const title = prop.title.map((part: any) => part?.plain_text ?? "").join("").trim();
+      if (title) return title;
+    }
+  }
+  return "";
 }
 
 export class GoogleCalendarClient {

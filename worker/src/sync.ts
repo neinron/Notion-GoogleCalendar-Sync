@@ -14,6 +14,7 @@ const DEFAULT_TASK_LIMIT = 6;
 const DEFAULT_CLEANUP_LIMIT = 10;
 
 type ErrorKind = "retryable" | "config" | "manual";
+type CourseMetadata = { registered: boolean; name: string };
 
 export class SyncEngine {
   constructor(
@@ -22,7 +23,7 @@ export class SyncEngine {
     private readonly google: GoogleCalendarClient,
   ) {}
 
-  private readonly courseRegistrations = new Map<string, boolean>();
+  private readonly courses = new Map<string, CourseMetadata>();
 
   async sync(options: { limit?: number; cleanupLimit?: number } = {}): Promise<SyncStats> {
     const limit = options.limit ?? DEFAULT_TASK_LIMIT;
@@ -50,11 +51,11 @@ export class SyncEngine {
         stats.processed += 1;
 
         try {
-          const registered = await this.taskHasRegisteredCourse(task);
-          if (!registered) {
-            await this.syncUnregisteredTask(task, events.get(task.pageId) ?? null, stats);
+          const courseContext = await this.taskCourseContext(task);
+          if (!courseContext.registered) {
+            await this.syncUnregisteredTask(courseContext.task, events.get(task.pageId) ?? null, stats);
           } else {
-            await this.syncTask(task, events.get(task.pageId) ?? null, stats);
+            await this.syncTask(courseContext.task, events.get(task.pageId) ?? null, stats);
           }
         } catch (error) {
           const kind = classifySyncError(error);
@@ -141,19 +142,30 @@ export class SyncEngine {
     await this.state.deleteSetting("sync_phase");
   }
 
-  private async taskHasRegisteredCourse(task: NotionTask): Promise<boolean> {
+  private async taskCourseContext(task: NotionTask): Promise<{ registered: boolean; task: NotionTask }> {
     const courseIds = task.course.split(",").filter(Boolean);
+    const registeredNames: string[] = [];
+    let registered = false;
+
     for (const courseId of courseIds) {
-      const cached = this.courseRegistrations.get(courseId);
-      if (cached !== undefined) {
-        if (cached) return true;
-        continue;
+      let metadata = this.courses.get(courseId);
+      if (!metadata) {
+        metadata = await this.notion.courseMetadata(courseId);
+        this.courses.set(courseId, metadata);
       }
-      const registered = await this.notion.courseRegistered(courseId);
-      this.courseRegistrations.set(courseId, registered);
-      if (registered) return true;
+      if (metadata.registered) {
+        registered = true;
+        registeredNames.push(metadata.name || courseId);
+      }
     }
-    return false;
+
+    return {
+      registered,
+      task: {
+        ...task,
+        courseNames: registeredNames.join(", "),
+      },
+    };
   }
 
   private async syncUnregisteredTask(task: NotionTask, event: GoogleEvent | null, stats: SyncStats): Promise<void> {

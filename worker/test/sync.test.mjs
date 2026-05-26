@@ -14,6 +14,7 @@ function task(overrides = {}) {
     taskType: "To-Do",
     priority: "High",
     course: "course1",
+    courseNames: "",
     googleSyncStatus: "",
     dueStart: "2026-05-22",
     doStart: "2026-05-21T10:00:00+02:00",
@@ -139,9 +140,12 @@ class FakeNotion {
     return { tasks: page, nextCursor: String(next), hasMore: next < this.tasks.length };
   }
 
-  async courseRegistered(courseId) {
+  async courseMetadata(courseId) {
     this.courseReads += 1;
-    return this.registeredCourses.get(courseId) ?? true;
+    return {
+      registered: this.registeredCourses.get(courseId) ?? true,
+      name: `Course ${courseId}`,
+    };
   }
 
   async updatePageProperties(pageId, properties) {
@@ -285,6 +289,16 @@ test("per-run course registration memory cache prevents repeated Notion course r
 
   assert.equal(result.created, 2);
   assert.equal(notion.courseReads, 1);
+});
+
+test("Google event description uses course name instead of course id", async () => {
+  const state = new FakeState();
+  const google = new FakeGoogle([]);
+  const result = await new SyncEngine(state, new FakeNotion([task()]), google).sync();
+
+  assert.equal(result.created, 1);
+  assert.match(String(google.created[0].description), /Course: Course course1/);
+  assert.doesNotMatch(String(google.created[0].description), /Course: course1$/m);
 });
 
 test("Notion deleted sync status prevents Google event creation", async () => {
