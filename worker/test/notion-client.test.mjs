@@ -14,6 +14,7 @@ function notionTaskPage(id, courseId) {
       Type: { select: { name: "To-Do" } },
       Priority: { select: { name: "Medium" } },
       Course: { relation: [{ id: courseId }] },
+      "Synced with Google": { select: null },
       "Do Date": { date: { start: "2026-05-24" } },
       "Due Date": { date: null },
     },

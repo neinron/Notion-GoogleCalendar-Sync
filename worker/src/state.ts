@@ -98,27 +98,6 @@ export class D1State {
     return result.results ?? [];
   }
 
-  async getCourseRegistration(courseId: string): Promise<{ registered: boolean; updatedAt: string } | null> {
-    const row = await this.db
-      .prepare("SELECT registered, updated_at FROM course_registration_cache WHERE course_id = ?")
-      .bind(courseId)
-      .first<{ registered: number; updated_at: string }>();
-    return row ? { registered: row.registered === 1, updatedAt: row.updated_at } : null;
-  }
-
-  async upsertCourseRegistration(courseId: string, registered: boolean): Promise<void> {
-    await this.db
-      .prepare(
-        `INSERT INTO course_registration_cache (course_id, registered, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(course_id) DO UPDATE SET
-          registered = excluded.registered,
-          updated_at = excluded.updated_at`,
-      )
-      .bind(courseId, registered ? 1 : 0, utcNow())
-      .run();
-  }
-
   async markSeen(scanId: string, notionPageId: string): Promise<void> {
     await this.db
       .prepare(

@@ -60,8 +60,10 @@ export class NotionClient {
     return await res.json();
   }
 
-  async clearDoDate(pageId: string): Promise<any> {
-    return await this.updatePageProperties(pageId, { "Do Date": { date: null } });
+  async setGoogleSyncStatus(pageId: string, status: "synced" | "deleted"): Promise<any> {
+    return await this.updatePageProperties(pageId, {
+      "Synced with Google": { select: { name: status } },
+    });
   }
 }
 

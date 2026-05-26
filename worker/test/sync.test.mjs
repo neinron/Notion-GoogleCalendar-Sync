@@ -14,6 +14,7 @@ function task(overrides = {}) {
     taskType: "To-Do",
     priority: "High",
     course: "course1",
+    googleSyncStatus: "",
     dueStart: "2026-05-22",
     doStart: "2026-05-21T10:00:00+02:00",
     doEnd: "2026-05-21T11:00:00+02:00",
@@ -124,10 +125,11 @@ class FakeState {
 }
 
 class FakeNotion {
-  constructor(tasks) {
+  constructor(tasks, { registeredCourses = new Map() } = {}) {
     this.tasks = tasks;
     this.updated = [];
     this.courseReads = 0;
+    this.registeredCourses = registeredCourses;
   }
 
   async listTasksPage({ startCursor, pageSize = 10 } = {}) {
@@ -137,14 +139,20 @@ class FakeNotion {
     return { tasks: page, nextCursor: String(next), hasMore: next < this.tasks.length };
   }
 
-  async courseRegistered() {
+  async courseRegistered(courseId) {
     this.courseReads += 1;
-    return true;
+    return this.registeredCourses.get(courseId) ?? true;
   }
 
   async updatePageProperties(pageId, properties) {
     this.updated.push({ pageId, properties });
     return { last_edited_time: "n2" };
+  }
+
+  async setGoogleSyncStatus(pageId, status) {
+    return await this.updatePageProperties(pageId, {
+      "Synced with Google": { select: { name: status } },
+    });
   }
 }
 
@@ -229,17 +237,34 @@ test("Google update 400 deletes and recreates the event from Notion", async () =
 });
 
 test("existing Google event is deleted when its Notion task belongs to an unregistered course", async () => {
-  const state = new FakeState(null, { registeredCourses: new Map([["old-course", false]]) });
+  const state = new FakeState();
   const google = new FakeGoogle([event({ notionPageId: "old-course-task", eventId: "old-event" })]);
   const result = await new SyncEngine(
     state,
-    new FakeNotion([task({ pageId: "old-course-task", course: "old-course" })]),
+    new FakeNotion([task({ pageId: "old-course-task", course: "old-course" })], {
+      registeredCourses: new Map([["old-course", false]]),
+    }),
     google,
   ).sync();
 
   assert.equal(result.deleted_google, 1);
   assert.deepEqual(google.deleted, ["old-event"]);
   assert.equal(state.record.sync_status, "unregistered");
+});
+
+test("cancelled Google event marks Notion as deleted without clearing Do Date", async () => {
+  const state = new FakeState();
+  const notion = new FakeNotion([task()]);
+  const google = new FakeGoogle([event({ status: "cancelled", updated: "g2" })]);
+  const result = await new SyncEngine(state, notion, google).sync();
+
+  assert.equal(result.cleared_notion_dates, 0);
+  assert.equal(state.record.sync_status, "google_deleted");
+  assert.deepEqual(notion.updated[0], {
+    pageId: "page1",
+    properties: { "Synced with Google": { select: { name: "deleted" } } },
+  });
+  assert.equal("Do Date" in notion.updated[0].properties, false);
 });
 
 test("retryable runtime errors are not stored as manual conflicts", async () => {
@@ -253,13 +278,33 @@ test("retryable runtime errors are not stored as manual conflicts", async () => 
   assert.equal(state.record.sync_status, "retry_pending");
 });
 
-test("course registration cache prevents repeated Notion course reads", async () => {
-  const state = new FakeState(null, { registeredCourses: new Map([["course1", true]]) });
-  const notion = new FakeNotion([task()]);
+test("per-run course registration memory cache prevents repeated Notion course reads", async () => {
+  const state = new FakeState(null, { registeredCourses: new Map() });
+  const notion = new FakeNotion([task({ pageId: "page1" }), task({ pageId: "page2" })]);
   const result = await new SyncEngine(state, notion, new FakeGoogle([])).sync();
 
-  assert.equal(result.created, 1);
-  assert.equal(notion.courseReads, 0);
+  assert.equal(result.created, 2);
+  assert.equal(notion.courseReads, 1);
+});
+
+test("Notion deleted sync status prevents Google event creation", async () => {
+  const state = new FakeState();
+  const google = new FakeGoogle([]);
+  const result = await new SyncEngine(state, new FakeNotion([task({ googleSyncStatus: "deleted" })]), google).sync();
+
+  assert.equal(result.created, 0);
+  assert.equal(google.created.length, 0);
+  assert.equal(state.record.sync_status, "google_deleted");
+});
+
+test("Notion deleted sync status removes active Google event", async () => {
+  const state = new FakeState();
+  const google = new FakeGoogle([event()]);
+  const result = await new SyncEngine(state, new FakeNotion([task({ googleSyncStatus: "deleted" })]), google).sync();
+
+  assert.equal(result.deleted_google, 1);
+  assert.deepEqual(google.deleted, ["event1"]);
+  assert.equal(state.record.sync_status, "google_deleted");
 });
 
 test("task and cleanup phases continue across small batches", async () => {

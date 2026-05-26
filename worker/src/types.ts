@@ -28,6 +28,7 @@ export interface NotionTask {
   taskType: string;
   priority: string;
   course: string;
+  googleSyncStatus: string;
   dueStart: string;
   doStart: string;
   doEnd: string;

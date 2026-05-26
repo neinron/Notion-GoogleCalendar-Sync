@@ -10,7 +10,6 @@ import {
 import { D1State } from "./state";
 import type { GoogleEvent, NotionTask, SyncStats } from "./types";
 
-const COURSE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_TASK_LIMIT = 6;
 const DEFAULT_CLEANUP_LIMIT = 10;
 
@@ -22,6 +21,8 @@ export class SyncEngine {
     private readonly notion: NotionClient,
     private readonly google: GoogleCalendarClient,
   ) {}
+
+  private readonly courseRegistrations = new Map<string, boolean>();
 
   async sync(options: { limit?: number; cleanupLimit?: number } = {}): Promise<SyncStats> {
     const limit = options.limit ?? DEFAULT_TASK_LIMIT;
@@ -143,13 +144,13 @@ export class SyncEngine {
   private async taskHasRegisteredCourse(task: NotionTask): Promise<boolean> {
     const courseIds = task.course.split(",").filter(Boolean);
     for (const courseId of courseIds) {
-      const cached = await this.state.getCourseRegistration(courseId);
-      if (cached && Date.now() - Date.parse(cached.updatedAt) < COURSE_CACHE_TTL_MS) {
-        if (cached.registered) return true;
+      const cached = this.courseRegistrations.get(courseId);
+      if (cached !== undefined) {
+        if (cached) return true;
         continue;
       }
       const registered = await this.notion.courseRegistered(courseId);
-      await this.state.upsertCourseRegistration(courseId, registered);
+      this.courseRegistrations.set(courseId, registered);
       if (registered) return true;
     }
     return false;
@@ -194,18 +195,52 @@ export class SyncEngine {
       return;
     }
 
-    if (event?.status === "cancelled") {
-      await this.notion.clearDoDate(task.pageId);
+    if (task.googleSyncStatus === "deleted") {
+      const currentGoogleHash = event ? await googleHash(event) : "";
+      if (event && event.status !== "cancelled") {
+        await this.google.deleteEvent(event.eventId);
+        stats.deleted_google += 1;
+      }
       await this.state.upsert(task.pageId, {
-        googleEventId: event.eventId,
+        googleEventId: event?.eventId ?? record?.google_event_id ?? null,
         lastNotionHash: currentNotionHash,
-        lastGoogleHash: await googleHash(event),
+        lastGoogleHash: currentGoogleHash,
         lastNotionEditedTime: task.lastEditedTime,
-        lastGoogleUpdated: event.updated,
-        syncStatus: "unscheduled",
+        lastGoogleUpdated: event?.updated ?? "",
+        syncStatus: "google_deleted",
         lastError: "",
       });
-      stats.cleared_notion_dates += 1;
+      return;
+    }
+
+    if (event?.status === "cancelled") {
+      const currentGoogleHash = await googleHash(event);
+      const notionChanged = Boolean(record?.last_notion_hash && record.last_notion_hash !== currentNotionHash);
+      if (notionChanged && task.doStart) {
+        const created = await this.google.createEvent(notionTaskToGoogleBody(task));
+        const markedTask = await this.markGoogleSyncStatus(task, "synced");
+        await this.state.upsert(task.pageId, {
+          googleEventId: created.eventId,
+          lastNotionHash: await notionHash(markedTask),
+          lastGoogleHash: await googleHash(created),
+          lastNotionEditedTime: markedTask.lastEditedTime,
+          lastGoogleUpdated: created.updated,
+          syncStatus: "synced",
+          lastError: "",
+        });
+        stats.created += 1;
+        return;
+      }
+      const markedTask = await this.markGoogleSyncStatus(task, "deleted");
+      await this.state.upsert(task.pageId, {
+        googleEventId: event.eventId,
+        lastNotionHash: await notionHash(markedTask),
+        lastGoogleHash: currentGoogleHash,
+        lastNotionEditedTime: markedTask.lastEditedTime,
+        lastGoogleUpdated: event.updated,
+        syncStatus: "google_deleted",
+        lastError: "",
+      });
       return;
     }
 
@@ -228,11 +263,12 @@ export class SyncEngine {
 
     if (!event) {
       const created = await this.google.createEvent(notionTaskToGoogleBody(task));
+      const markedTask = await this.markGoogleSyncStatus(task, "synced");
       await this.state.upsert(task.pageId, {
         googleEventId: created.eventId,
-        lastNotionHash: currentNotionHash,
+        lastNotionHash: await notionHash(markedTask),
         lastGoogleHash: await googleHash(created),
-        lastNotionEditedTime: task.lastEditedTime,
+        lastNotionEditedTime: markedTask.lastEditedTime,
         lastGoogleUpdated: created.updated,
         syncStatus: "synced",
         lastError: "",
@@ -251,8 +287,15 @@ export class SyncEngine {
     }
 
     if (googleChanged && !notionChanged) {
-      const updatedPage = await this.notion.updatePageProperties(task.pageId, googleEventToNotionProperties(event));
-      const updatedTask = { ...task, lastEditedTime: updatedPage.last_edited_time ?? task.lastEditedTime };
+      const updatedPage = await this.notion.updatePageProperties(task.pageId, {
+        ...googleEventToNotionProperties(event),
+        "Synced with Google": { select: { name: "synced" } },
+      });
+      const updatedTask = {
+        ...task,
+        googleSyncStatus: "synced",
+        lastEditedTime: updatedPage.last_edited_time ?? task.lastEditedTime,
+      };
       await this.state.upsert(task.pageId, {
         googleEventId: event.eventId,
         lastNotionHash: await notionHash(updatedTask),
@@ -269,6 +312,21 @@ export class SyncEngine {
     const desired = desiredGoogleEvent(event.eventId, task, event);
     if (notionChanged || (await googleHash(desired)) !== currentGoogleHash) {
       await this.updateGoogleFromNotion(task, event, currentNotionHash, stats);
+      return;
+    }
+
+    if (record?.sync_status !== "synced") {
+      const markedTask = await this.markGoogleSyncStatus(task, "synced");
+      await this.state.upsert(task.pageId, {
+        googleEventId: event.eventId,
+        lastNotionHash: await notionHash(markedTask),
+        lastGoogleHash: currentGoogleHash,
+        lastNotionEditedTime: markedTask.lastEditedTime,
+        lastGoogleUpdated: event.updated,
+        syncStatus: "synced",
+        lastError: "",
+      });
+      stats.updated_notion += 1;
       return;
     }
 
@@ -299,16 +357,22 @@ export class SyncEngine {
       await this.google.deleteEvent(event.eventId);
       updated = await this.google.createEvent(body);
     }
+    const markedTask = await this.markGoogleSyncStatus(task, "synced");
     await this.state.upsert(task.pageId, {
       googleEventId: updated.eventId,
-      lastNotionHash: currentNotionHash,
+      lastNotionHash: await notionHash(markedTask),
       lastGoogleHash: await googleHash(updated),
-      lastNotionEditedTime: task.lastEditedTime,
+      lastNotionEditedTime: markedTask.lastEditedTime,
       lastGoogleUpdated: updated.updated,
       syncStatus: "synced",
       lastError: "",
     });
     stats.updated_google += 1;
+  }
+
+  private async markGoogleSyncStatus(task: NotionTask, status: "synced" | "deleted"): Promise<NotionTask> {
+    const updatedPage = await this.notion.setGoogleSyncStatus(task.pageId, status);
+    return { ...task, googleSyncStatus: status, lastEditedTime: updatedPage.last_edited_time ?? task.lastEditedTime };
   }
 }
 

@@ -15,9 +15,10 @@ The old ICS feed has been removed. Google Calendar now stores real events, and t
 - Notion tasks with `Do Date` become Google Calendar events.
 - Google events store `extendedProperties.private.notion_page_id`.
 - Moving or editing a synced Google event updates the Notion task.
-- Deleting a Google event does not delete or complete the Notion task; it clears the task's `Do Date`.
+- Deleting a Google event does not delete, complete, or unschedule the Notion task; it sets the Notion select property `Synced with Google` to `deleted`.
 - Completed Notion tasks remove their Google events.
 - Only tasks related to a Notion course page where `Registration` is checked are synced; `Registered` is accepted as a fallback property name. Events for tasks from unregistered courses are removed from Google.
+- Notion remains the source of truth for whether a task should appear in Google: `Synced with Google = deleted` prevents/reverses Google event creation until it is changed in Notion.
 - If Notion and Google both changed since the last successful sync, Notion wins and the Google event is rebuilt from the Notion task.
 
 ## Cloudflare Worker Runtime
@@ -140,9 +141,9 @@ Future Notion webhook payloads must include a matching `X-Notion-Signature`; oth
 
 ## Sync Reliability Model
 
-The Worker processes small batches so it stays under Cloudflare subrequest limits. It stores Notion pagination progress in D1, then runs a separate cleanup phase for Google events that were not seen in the last completed Notion scan.
+The Worker processes small batches so it stays under Cloudflare subrequest limits. It stores only technical sync state in D1: event IDs, hashes, run logs, cursors, and scan markers. Notion properties decide whether a task belongs in Google.
 
-Runtime/API failures such as subrequest limits, rate limits, network errors, and 5xx responses are marked `retry_pending` and retried by the Queue. `/conflicts` is reserved for real manual data conflicts. Course registration is read from the related Course page's `Registration` checkbox and cached in D1 for six hours.
+Runtime/API failures such as subrequest limits, rate limits, network errors, and 5xx responses are marked `retry_pending` and retried by the Queue. `/conflicts` is reserved for real manual data conflicts. Course registration is read from the related Course page's `Registration` checkbox and cached only in memory for the current Worker invocation.
 
 If old rows were marked as `conflict` by a previous subrequest failure, migration `0002_robust_sync.sql` resets those rows to `retry_pending` and clears stale cursors.
 
