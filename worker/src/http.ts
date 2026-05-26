@@ -36,10 +36,15 @@ export async function runSync(env: Env, request?: Request): Promise<Response> {
 
   const url = request ? new URL(request.url) : null;
   const rawLimit = url?.searchParams.get("limit");
-  const limit = rawLimit ? Number(rawLimit) : 250;
+  const rawCleanupLimit = url?.searchParams.get("cleanup_limit");
+  const limit = rawLimit ? Number(rawLimit) : 25;
+  const cleanupLimit = rawCleanupLimit ? Number(rawCleanupLimit) : 25;
 
-  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-    return json({ ok: false, error: "invalid limit", allowed: "1-500" }, 400);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    return json({ ok: false, error: "invalid limit", allowed: "1-50" }, 400);
+  }
+  if (!Number.isInteger(cleanupLimit) || cleanupLimit < 0 || cleanupLimit > 50) {
+    return json({ ok: false, error: "invalid cleanup_limit", allowed: "0-50" }, 400);
   }
 
   const state = new D1State(env.DB);
@@ -51,7 +56,7 @@ export async function runSync(env: Env, request?: Request): Promise<Response> {
 
   try {
     const engine = new SyncEngine(state, new NotionClient(env), new GoogleCalendarClient(env));
-    return json(await engine.sync({ limit }));
+    return json(await engine.sync({ limit, cleanupLimit }));
   } finally {
     await state.releaseLock("sync_lock", owner);
   }
