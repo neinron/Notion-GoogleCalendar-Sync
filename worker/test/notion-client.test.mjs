@@ -20,15 +20,16 @@ function notionTaskPage(id, courseId) {
   };
 }
 
-test("Notion client only returns tasks from registered courses", async () => {
+test("Notion client returns one task page and can read course registration", async () => {
   const oldFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(String(url));
     if (String(url).includes("/databases/db/query")) {
       return Response.json({
-        has_more: false,
-        results: [notionTaskPage("registered-task", "registered-course"), notionTaskPage("old-task", "old-course")],
+        has_more: true,
+        next_cursor: "next-page",
+        results: [notionTaskPage("registered-task", "registered-course")],
       });
     }
     if (String(url).endsWith("/pages/registered-course")) {
@@ -46,14 +47,17 @@ test("Notion client only returns tasks from registered courses", async () => {
       NOTION_VERSION: "2022-06-28",
       DATABASE_ID: "db",
     });
-    const tasks = await client.listTasks();
+    const page = await client.listTasksPage({ pageSize: 1 });
+    const registered = await client.courseRegistered("registered-course");
 
     assert.deepEqual(
-      tasks.map((task) => task.pageId),
+      page.tasks.map((task) => task.pageId),
       ["registered-task"],
     );
+    assert.equal(page.hasMore, true);
+    assert.equal(page.nextCursor, "next-page");
+    assert.equal(registered, true);
     assert(calls.some((url) => url.endsWith("/pages/registered-course")));
-    assert(calls.some((url) => url.endsWith("/pages/old-course")));
   } finally {
     globalThis.fetch = oldFetch;
   }

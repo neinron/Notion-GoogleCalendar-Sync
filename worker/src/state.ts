@@ -1,4 +1,4 @@
-import type { SyncRecord } from "./types";
+import type { SyncRecord, SyncStats } from "./types";
 
 export class D1State {
   constructor(private readonly db: D1Database) {}
@@ -65,9 +65,132 @@ export class D1State {
     });
   }
 
+  async markRetryable(notionPageId: string, googleEventId: string | null, error: string): Promise<void> {
+    const record = await this.get(notionPageId);
+    await this.upsert(notionPageId, {
+      googleEventId: googleEventId || record?.google_event_id || null,
+      lastNotionHash: record?.last_notion_hash ?? "",
+      lastGoogleHash: record?.last_google_hash ?? "",
+      lastNotionEditedTime: record?.last_notion_edited_time ?? "",
+      lastGoogleUpdated: record?.last_google_updated ?? "",
+      syncStatus: "retry_pending",
+      lastError: error,
+    });
+  }
+
+  async markManualConflict(notionPageId: string, googleEventId: string | null, error: string): Promise<void> {
+    const record = await this.get(notionPageId);
+    await this.upsert(notionPageId, {
+      googleEventId: googleEventId || record?.google_event_id || null,
+      lastNotionHash: record?.last_notion_hash ?? "",
+      lastGoogleHash: record?.last_google_hash ?? "",
+      lastNotionEditedTime: record?.last_notion_edited_time ?? "",
+      lastGoogleUpdated: record?.last_google_updated ?? "",
+      syncStatus: "manual_conflict",
+      lastError: error,
+    });
+  }
+
   async listConflicts(): Promise<unknown[]> {
     const result = await this.db
-      .prepare("SELECT * FROM sync_records WHERE sync_status = 'conflict' ORDER BY updated_at DESC")
+      .prepare("SELECT * FROM sync_records WHERE sync_status = 'manual_conflict' ORDER BY updated_at DESC")
+      .all();
+    return result.results ?? [];
+  }
+
+  async getCourseRegistration(courseId: string): Promise<{ registered: boolean; updatedAt: string } | null> {
+    const row = await this.db
+      .prepare("SELECT registered, updated_at FROM course_registration_cache WHERE course_id = ?")
+      .bind(courseId)
+      .first<{ registered: number; updated_at: string }>();
+    return row ? { registered: row.registered === 1, updatedAt: row.updated_at } : null;
+  }
+
+  async upsertCourseRegistration(courseId: string, registered: boolean): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO course_registration_cache (course_id, registered, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(course_id) DO UPDATE SET
+          registered = excluded.registered,
+          updated_at = excluded.updated_at`,
+      )
+      .bind(courseId, registered ? 1 : 0, utcNow())
+      .run();
+  }
+
+  async markSeen(scanId: string, notionPageId: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO sync_seen (notion_page_id, scan_id, seen_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(notion_page_id) DO UPDATE SET
+          scan_id = excluded.scan_id,
+          seen_at = excluded.seen_at`,
+      )
+      .bind(notionPageId, scanId, utcNow())
+      .run();
+  }
+
+  async wasSeenInScan(scanId: string, notionPageId: string): Promise<boolean> {
+    const row = await this.db
+      .prepare("SELECT 1 AS found FROM sync_seen WHERE notion_page_id = ? AND scan_id = ?")
+      .bind(notionPageId, scanId)
+      .first<{ found: number }>();
+    return Boolean(row);
+  }
+
+  async createRun(id: string, source: string): Promise<void> {
+    await this.db
+      .prepare("INSERT INTO sync_runs (id, source, started_at) VALUES (?, ?, ?)")
+      .bind(id, source, utcNow())
+      .run();
+  }
+
+  async finishRun(id: string, status: string, stats: SyncStats | null, errorSummary = ""): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE sync_runs SET
+          status = ?,
+          phase = ?,
+          processed = ?,
+          created = ?,
+          updated_google = ?,
+          updated_notion = ?,
+          deleted_google = ?,
+          cleared_notion_dates = ?,
+          retryable_errors = ?,
+          manual_conflicts = ?,
+          skipped = ?,
+          has_more = ?,
+          error_summary = ?,
+          finished_at = ?
+        WHERE id = ?`,
+      )
+      .bind(
+        status,
+        stats?.phase ?? "",
+        stats?.processed ?? 0,
+        stats?.created ?? 0,
+        stats?.updated_google ?? 0,
+        stats?.updated_notion ?? 0,
+        stats?.deleted_google ?? 0,
+        stats?.cleared_notion_dates ?? 0,
+        stats?.retryable_errors ?? 0,
+        stats?.manual_conflicts ?? 0,
+        stats?.skipped ?? 0,
+        stats?.has_more ? 1 : 0,
+        errorSummary.slice(0, 1000),
+        utcNow(),
+        id,
+      )
+      .run();
+  }
+
+  async listRuns(limit = 20): Promise<unknown[]> {
+    const result = await this.db
+      .prepare("SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT ?")
+      .bind(limit)
       .all();
     return result.results ?? [];
   }

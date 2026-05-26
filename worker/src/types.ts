@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  SYNC_QUEUE?: Queue<SyncQueueMessage>;
   NOTION_API_KEY: string;
   DATABASE_ID: string;
   GOOGLE_CALENDAR_ID: string;
@@ -12,6 +13,11 @@ export interface Env {
   NOTION_WEBHOOK_VERIFICATION_TOKEN?: string;
   NOTION_VERSION?: string;
   GOOGLE_TIME_ZONE?: string;
+}
+
+export interface SyncQueueMessage {
+  type: "sync";
+  reason: string;
 }
 
 export interface NotionTask {
@@ -57,12 +63,16 @@ export interface SyncRecord {
 
 export interface SyncStats {
   ok: true;
+  phase: "tasks" | "cleanup";
+  processed: number;
   created: number;
   updated_google: number;
   updated_notion: number;
   deleted_google: number;
   cleared_notion_dates: number;
-  conflicts: number;
+  retryable_errors: number;
+  manual_conflicts: number;
   skipped: number;
   has_more?: boolean;
+  error?: string;
 }

@@ -1,7 +1,7 @@
 import { GoogleCalendarClient, NotionClient } from "./clients";
 import { D1State } from "./state";
-import { SyncEngine } from "./sync";
-import type { Env } from "./types";
+import { classifySyncError, errorMessage, SyncEngine } from "./sync";
+import type { Env, SyncStats } from "./types";
 
 export function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -37,29 +37,62 @@ export async function runSync(env: Env, request?: Request): Promise<Response> {
   const url = request ? new URL(request.url) : null;
   const rawLimit = url?.searchParams.get("limit");
   const rawCleanupLimit = url?.searchParams.get("cleanup_limit");
-  const limit = rawLimit ? Number(rawLimit) : 25;
-  const cleanupLimit = rawCleanupLimit ? Number(rawCleanupLimit) : 25;
+  const limit = rawLimit ? Number(rawLimit) : 6;
+  const cleanupLimit = rawCleanupLimit ? Number(rawCleanupLimit) : 10;
 
-  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
-    return json({ ok: false, error: "invalid limit", allowed: "1-50" }, 400);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+    return json({ ok: false, error: "invalid limit", allowed: "1-20" }, 400);
   }
-  if (!Number.isInteger(cleanupLimit) || cleanupLimit < 0 || cleanupLimit > 50) {
-    return json({ ok: false, error: "invalid cleanup_limit", allowed: "0-50" }, 400);
+  if (!Number.isInteger(cleanupLimit) || cleanupLimit < 0 || cleanupLimit > 20) {
+    return json({ ok: false, error: "invalid cleanup_limit", allowed: "0-20" }, 400);
   }
 
+  try {
+    return json(await runSyncJob(env, "manual", { limit, cleanupLimit }));
+  } catch (error) {
+    const kind = classifySyncError(error);
+    const message = errorMessage(error);
+    const status = message === "sync already running" ? 423 : kind === "config" ? 503 : 500;
+    return json({ ok: false, error: message, kind }, status);
+  }
+}
+
+export async function runSyncJob(
+  env: Env,
+  source: string,
+  options: { limit?: number; cleanupLimit?: number } = {},
+): Promise<SyncStats> {
+  const missing = missingRequired(env);
+  if (missing.length) throw new Error(`missing required configuration: ${missing.join(", ")}`);
   const state = new D1State(env.DB);
   const owner = crypto.randomUUID();
 
   if (!(await state.acquireLock("sync_lock", owner))) {
-    return json({ ok: false, error: "sync already running" }, 423);
+    throw new Error("sync already running");
   }
 
+  const runId = crypto.randomUUID();
+  let runCreated = false;
   try {
+    await state.createRun(runId, source);
+    runCreated = true;
     const engine = new SyncEngine(state, new NotionClient(env), new GoogleCalendarClient(env));
-    return json(await engine.sync({ limit, cleanupLimit }));
+    const stats = await engine.sync(options);
+    const status = stats.retryable_errors || stats.manual_conflicts ? "partial" : stats.has_more ? "more" : "success";
+    await state.finishRun(runId, status, stats, stats.error ?? "");
+    return stats;
+  } catch (error) {
+    if (runCreated) await state.finishRun(runId, classifySyncError(error), null, errorMessage(error));
+    throw error;
   } finally {
     await state.releaseLock("sync_lock", owner);
   }
+}
+
+export async function enqueueSync(env: Env, reason: string): Promise<boolean> {
+  if (!env.SYNC_QUEUE) return false;
+  await env.SYNC_QUEUE.send({ type: "sync", reason });
+  return true;
 }
 
 export async function renewGoogleWatch(env: Env): Promise<Response> {

@@ -9,11 +9,32 @@ routes = [
 [triggers]
 crons = ["*/15 * * * *", "7 3 * * *"]
 
+[[queues.producers]]
+binding = "SYNC_QUEUE"
+queue = "notion-calendar-sync"
+
+[[queues.consumers]]
+queue = "notion-calendar-sync"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 5
+retry_delay = 300
+
 [[d1_databases]]
 binding = "DB"
 database_name = "notion_calendar_sync"
 database_id = "fcafdee4-6ef6-4b1d-ac6a-671a5c41cc8e"
 migrations_dir = "migrations"
+
+[observability]
+enabled = true
+
+  [observability.logs]
+  head_sampling_rate = 1
+
+  [observability.traces]
+  enabled = true
+  head_sampling_rate = 0.1
 
 [vars]
 NOTION_VERSION = "2022-06-28"

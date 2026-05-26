@@ -43,10 +43,13 @@ function event(overrides = {}) {
 }
 
 class FakeState {
-  constructor(record = null) {
+  constructor(record = null, { registeredCourses = new Map([["course1", true]]) } = {}) {
     this.record = record;
     this.conflicts = [];
+    this.retryable = [];
     this.settings = new Map();
+    this.seen = new Map();
+    this.registeredCourses = registeredCourses;
   }
 
   async get() {
@@ -63,6 +66,23 @@ class FakeState {
 
   async deleteSetting(key) {
     this.settings.delete(key);
+  }
+
+  async getCourseRegistration(courseId) {
+    if (!this.registeredCourses.has(courseId)) return null;
+    return { registered: this.registeredCourses.get(courseId), updatedAt: new Date().toISOString() };
+  }
+
+  async upsertCourseRegistration(courseId, registered) {
+    this.registeredCourses.set(courseId, registered);
+  }
+
+  async markSeen(scanId, notionPageId) {
+    this.seen.set(notionPageId, scanId);
+  }
+
+  async wasSeenInScan(scanId, notionPageId) {
+    return this.seen.get(notionPageId) === scanId;
   }
 
   async upsert(notionPageId, data) {
@@ -82,16 +102,44 @@ class FakeState {
   async markConflict(notionPageId, googleEventId, error) {
     this.conflicts.push({ notionPageId, googleEventId, error });
   }
+
+  async markRetryable(notionPageId, googleEventId, error) {
+    this.retryable.push({ notionPageId, googleEventId, error });
+    this.record = {
+      notion_page_id: notionPageId,
+      google_event_id: googleEventId ?? null,
+      last_notion_hash: "",
+      last_google_hash: "",
+      last_notion_edited_time: "",
+      last_google_updated: "",
+      sync_status: "retry_pending",
+      last_error: error,
+      updated_at: "now",
+    };
+  }
+
+  async markManualConflict(notionPageId, googleEventId, error) {
+    this.conflicts.push({ notionPageId, googleEventId, error });
+  }
 }
 
 class FakeNotion {
   constructor(tasks) {
     this.tasks = tasks;
     this.updated = [];
+    this.courseReads = 0;
   }
 
-  async listTasks() {
-    return this.tasks;
+  async listTasksPage({ startCursor, pageSize = 10 } = {}) {
+    const start = startCursor ? Number(startCursor) : 0;
+    const page = this.tasks.slice(start, start + pageSize);
+    const next = start + page.length;
+    return { tasks: page, nextCursor: String(next), hasMore: next < this.tasks.length };
+  }
+
+  async courseRegistered() {
+    this.courseReads += 1;
+    return true;
   }
 
   async updatePageProperties(pageId, properties) {
@@ -101,9 +149,10 @@ class FakeNotion {
 }
 
 class FakeGoogle {
-  constructor(events, { failUpdate400 = false } = {}) {
+  constructor(events, { failUpdate400 = false, failCreate = null } = {}) {
     this.events = events;
     this.failUpdate400 = failUpdate400;
+    this.failCreate = failCreate;
     this.created = [];
     this.updated = [];
     this.deleted = [];
@@ -114,6 +163,7 @@ class FakeGoogle {
   }
 
   async createEvent(body) {
+    if (this.failCreate) throw this.failCreate;
     this.created.push(body);
     return event({ eventId: "created", title: body.summary, updated: "g2" });
   }
@@ -148,7 +198,7 @@ test("simultaneous Notion and Google changes use Notion as source of truth", asy
   const google = new FakeGoogle([newEvent]);
   const result = await new SyncEngine(state, new FakeNotion([newTask]), google).sync();
 
-  assert.equal(result.conflicts, 0);
+  assert.equal(result.manual_conflicts, 0);
   assert.equal(result.updated_google, 1);
   assert.equal(google.updated[0].body.summary, "Changed in Notion");
   assert.equal(state.record.sync_status, "synced");
@@ -178,11 +228,57 @@ test("Google update 400 deletes and recreates the event from Notion", async () =
   assert.equal(state.record.google_event_id, "created");
 });
 
-test("existing Google event is deleted when its Notion task is filtered out", async () => {
-  const state = new FakeState();
-  const google = new FakeGoogle([event({ notionPageId: "old-course-task" })]);
-  const result = await new SyncEngine(state, new FakeNotion([]), google).sync();
+test("existing Google event is deleted when its Notion task belongs to an unregistered course", async () => {
+  const state = new FakeState(null, { registeredCourses: new Map([["old-course", false]]) });
+  const google = new FakeGoogle([event({ notionPageId: "old-course-task", eventId: "old-event" })]);
+  const result = await new SyncEngine(
+    state,
+    new FakeNotion([task({ pageId: "old-course-task", course: "old-course" })]),
+    google,
+  ).sync();
 
   assert.equal(result.deleted_google, 1);
-  assert.deepEqual(google.deleted, ["event1"]);
+  assert.deepEqual(google.deleted, ["old-event"]);
+  assert.equal(state.record.sync_status, "unregistered");
+});
+
+test("retryable runtime errors are not stored as manual conflicts", async () => {
+  const state = new FakeState();
+  const google = new FakeGoogle([], { failCreate: new Error("Too many subrequests by single Worker invocation") });
+  const result = await new SyncEngine(state, new FakeNotion([task()]), google).sync();
+
+  assert.equal(result.retryable_errors, 1);
+  assert.equal(result.manual_conflicts, 0);
+  assert.equal(state.conflicts.length, 0);
+  assert.equal(state.record.sync_status, "retry_pending");
+});
+
+test("course registration cache prevents repeated Notion course reads", async () => {
+  const state = new FakeState(null, { registeredCourses: new Map([["course1", true]]) });
+  const notion = new FakeNotion([task()]);
+  const result = await new SyncEngine(state, notion, new FakeGoogle([])).sync();
+
+  assert.equal(result.created, 1);
+  assert.equal(notion.courseReads, 0);
+});
+
+test("task and cleanup phases continue across small batches", async () => {
+  const state = new FakeState();
+  const notion = new FakeNotion([task({ pageId: "page1" }), task({ pageId: "page2" })]);
+  const google = new FakeGoogle([event({ notionPageId: "missing-page", eventId: "missing-event" })]);
+
+  const first = await new SyncEngine(state, notion, google).sync({ limit: 1, cleanupLimit: 1 });
+  assert.equal(first.phase, "tasks");
+  assert.equal(first.has_more, true);
+  assert.equal(state.settings.get("notion_cursor"), "1");
+
+  const second = await new SyncEngine(state, notion, google).sync({ limit: 1, cleanupLimit: 1 });
+  assert.equal(second.phase, "tasks");
+  assert.equal(second.has_more, true);
+  assert.equal(state.settings.get("sync_phase"), "cleanup");
+
+  const third = await new SyncEngine(state, notion, google).sync({ limit: 1, cleanupLimit: 1 });
+  assert.equal(third.phase, "cleanup");
+  assert.equal(third.deleted_google, 1);
+  assert.deepEqual(google.deleted, ["missing-event"]);
 });

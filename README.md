@@ -24,9 +24,10 @@ The old ICS feed has been removed. Google Calendar now stores real events, and t
 
 - HTTP/webhook runtime: Cloudflare Workers.
 - State: fresh D1 database bound as `DB`.
+- Async work: Cloudflare Queue bound as `SYNC_QUEUE`; webhooks enqueue sync jobs and return quickly.
 - Secrets: Cloudflare Worker Secrets.
 - Public hostname: `notionsync.jaronschurer.com`.
-- Cron Triggers: every 15 minutes for safety sync, and daily at 03:07 UTC for Google watch renewal plus safety sync.
+- Cron Triggers: every 15 minutes enqueue a safety sync, and daily at 03:07 UTC renews the Google watch plus enqueues a safety sync.
 
 ## Required Worker Secrets
 
@@ -63,6 +64,7 @@ Create the D1 database, copy the returned `database_id` into `wrangler.toml`, an
 
 ```bash
 npx wrangler d1 create notion_calendar_sync
+npx wrangler queues create notion-calendar-sync
 npm run d1:migrate:remote
 ```
 
@@ -92,7 +94,7 @@ npm run deploy:worker
 ## Cutover Checklist
 
 1. Deploy the Worker and confirm `GET https://notionsync.jaronschurer.com/health` returns `ok: true`.
-2. Run `GET /sync?token=<SYNC_SECRET>` manually.
+2. Run `GET /sync?token=<SYNC_SECRET>` manually; repeat while `has_more: true`, or let the Queue continuation jobs drain it.
 3. Run `GET /google/watch/renew?token=<SYNC_SECRET>`.
 4. Confirm `GET /webhook-channels?token=<SYNC_SECRET>` shows an active Google channel.
 5. Change the Notion webhook subscription to `https://notionsync.jaronschurer.com/webhooks/notion` and complete verification.
@@ -102,10 +104,11 @@ npm run deploy:worker
 ## HTTP Endpoints
 
 - `GET /health`: configuration and state health.
-- `GET|POST /sync?token=...`: run one sync.
-- `GET /conflicts?token=...`: list unresolved conflicts.
-- `POST /webhooks/google`: Google Calendar push notification receiver.
-- `POST /webhooks/notion`: Notion webhook receiver.
+- `GET|POST /sync?token=...`: run one budgeted sync batch.
+- `GET /conflicts?token=...`: list unresolved manual conflicts only.
+- `GET /runs?token=...`: list recent sync run summaries.
+- `POST /webhooks/google`: Google Calendar push notification receiver; enqueues a sync job.
+- `POST /webhooks/notion`: Notion webhook receiver; enqueues a sync job.
 - `GET|POST /google/watch/renew?token=...`: replace the Google Calendar events watch channel.
 - `GET /webhook-channels?token=...`: list registered Google watch channels.
 
@@ -119,7 +122,7 @@ Register or renew the channel:
 curl -fsS "https://notionsync.jaronschurer.com/google/watch/renew?token=<SYNC_SECRET>"
 ```
 
-Google sends `sync` notifications first; the Worker acknowledges those without running a sync. Later `exists` notifications run the normal sync engine.
+Google sends `sync` notifications first; the Worker acknowledges those without running a sync. Later `exists` notifications enqueue the normal sync engine.
 
 Google watch channels expire. The daily Cron Trigger renews them; `/webhook-channels` shows the active channel metadata.
 
@@ -134,6 +137,14 @@ https://notionsync.jaronschurer.com/webhooks/notion
 Notion will POST a one-time `verification_token`. The Worker stores it in D1 automatically. You can also set `NOTION_WEBHOOK_VERIFICATION_TOKEN` as a Worker secret if you prefer env-only configuration.
 
 Future Notion webhook payloads must include a matching `X-Notion-Signature`; otherwise the Worker rejects them.
+
+## Sync Reliability Model
+
+The Worker processes small batches so it stays under Cloudflare subrequest limits. It stores Notion pagination progress in D1, then runs a separate cleanup phase for Google events that were not seen in the last completed Notion scan.
+
+Runtime/API failures such as subrequest limits, rate limits, network errors, and 5xx responses are marked `retry_pending` and retried by the Queue. `/conflicts` is reserved for real manual data conflicts. Course registration is read from the related Course page's `Registration` checkbox and cached in D1 for six hours.
+
+If old rows were marked as `conflict` by a previous subrequest failure, migration `0002_robust_sync.sql` resets those rows to `retry_pending` and clears stale cursors.
 
 ## PythonAnywhere Fallback
 

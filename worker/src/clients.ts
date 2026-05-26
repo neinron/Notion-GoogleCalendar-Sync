@@ -15,46 +15,31 @@ export class NotionClient {
     };
   }
 
-  async listTasks(): Promise<NotionTask[]> {
-    const results: any[] = [];
-    let cursor = "";
-    do {
-      const body: Record<string, unknown> = { page_size: 100 };
-      if (cursor) body.start_cursor = cursor;
-      const res = await fetch(`https://api.notion.com/v1/databases/${this.env.DATABASE_ID}/query`, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(body),
-      });
-      await assertOk(res, "Notion database query failed");
-      const data: any = await res.json();
-      if (!Array.isArray(data.results)) throw new Error("Notion query returned invalid results");
-      results.push(...data.results);
-      cursor = data.has_more ? data.next_cursor || "" : "";
-      if (data.has_more && !cursor) throw new Error("Notion query has_more without next_cursor");
-    } while (cursor);
-    const tasks = results.map(parseNotionTask);
-    return await this.onlyRegisteredCourseTasks(tasks);
+  async listTasksPage(options: { startCursor?: string; pageSize?: number } = {}): Promise<{
+    tasks: NotionTask[];
+    nextCursor: string;
+    hasMore: boolean;
+  }> {
+    const body: Record<string, unknown> = { page_size: options.pageSize ?? 10 };
+    if (options.startCursor) body.start_cursor = options.startCursor;
+    const res = await fetch(`https://api.notion.com/v1/databases/${this.env.DATABASE_ID}/query`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    await assertOk(res, "Notion database query failed");
+    const data: any = await res.json();
+    if (!Array.isArray(data.results)) throw new Error("Notion query returned invalid results");
+    if (data.has_more && !data.next_cursor) throw new Error("Notion query has_more without next_cursor");
+    return {
+      tasks: data.results.map(parseNotionTask),
+      nextCursor: data.next_cursor ?? "",
+      hasMore: Boolean(data.has_more),
+    };
   }
 
-  private async onlyRegisteredCourseTasks(tasks: NotionTask[]): Promise<NotionTask[]> {
-    const courseIds = [...new Set(tasks.flatMap((task) => task.course.split(",").filter(Boolean)))];
-    if (!courseIds.length) return [];
-    const registeredCourseIds = await this.registeredCourseIds(courseIds);
-    return tasks.filter((task) => task.course.split(",").some((courseId) => registeredCourseIds.has(courseId)));
-  }
-
-  private async registeredCourseIds(courseIds: string[]): Promise<Set<string>> {
-    const registered = new Set<string>();
-    await Promise.all(
-      courseIds.map(async (courseId) => {
-        const page = await this.retrievePage(courseId);
-        if (courseIsRegistered(page)) {
-          registered.add(courseId);
-        }
-      }),
-    );
-    return registered;
+  async courseRegistered(courseId: string): Promise<boolean> {
+    return courseIsRegistered(await this.retrievePage(courseId));
   }
 
   private async retrievePage(pageId: string): Promise<any> {
@@ -187,7 +172,17 @@ export class GoogleCalendarClient {
 async function assertOk(res: Response, message: string): Promise<void> {
   if (res.ok) return;
   const body = await res.text();
-  throw new Error(`${message}: ${res.status} ${body.slice(0, 500)}`);
+  throw new ApiError(message, res.status, body);
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+    readonly responseBody: string,
+  ) {
+    super(`${message}: ${statusCode} ${responseBody.slice(0, 500)}`);
+  }
 }
 
 export class GoogleCalendarError extends Error {

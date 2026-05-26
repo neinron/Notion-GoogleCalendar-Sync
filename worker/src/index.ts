@@ -1,6 +1,17 @@
 import { D1State } from "./state";
 import type { Env } from "./types";
-import { constantTimeEqual, json, missingRequired, notionSignatureValid, renewGoogleWatch, requireToken, runSync } from "./http";
+import {
+  constantTimeEqual,
+  enqueueSync,
+  json,
+  missingRequired,
+  notionSignatureValid,
+  renewGoogleWatch,
+  requireToken,
+  runSync,
+  runSyncJob,
+} from "./http";
+import { classifySyncError, errorMessage } from "./sync";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -19,6 +30,7 @@ export default {
           calendar_id_set: Boolean(env.GOOGLE_CALENDAR_ID),
           public_base_url_set: Boolean(env.PUBLIC_BASE_URL),
           google_webhook_token_set: Boolean(env.GOOGLE_WEBHOOK_TOKEN),
+          queue_binding_set: Boolean(env.SYNC_QUEUE),
         },
         missing.length ? 503 : 200,
       );
@@ -42,6 +54,12 @@ export default {
       return json({ ok: true, channels: await new D1State(env.DB).listWebhookChannels() });
     }
 
+    if (url.pathname === "/runs" && request.method === "GET") {
+      const tokenError = requireToken(request, env);
+      if (tokenError) return tokenError;
+      return json({ ok: true, runs: await new D1State(env.DB).listRuns() });
+    }
+
     if (url.pathname === "/google/watch/renew" && ["GET", "POST"].includes(request.method)) {
       const tokenError = requireToken(request, env);
       if (tokenError) return tokenError;
@@ -54,7 +72,7 @@ export default {
       if (!constantTimeEqual(supplied, env.GOOGLE_WEBHOOK_TOKEN)) return json({ ok: false, error: "invalid google channel token" }, 403);
       const state = request.headers.get("X-Goog-Resource-State") || "";
       if (state === "sync") return json({ ok: true, ignored: true, reason: "channel sync notification" }, 202);
-      ctx.waitUntil(runSync(env).then((res) => res.text()).then((body) => console.log("google webhook sync", body)));
+      ctx.waitUntil(kickSync(env, "google-webhook"));
       return json({ ok: true, accepted: true }, 202);
     }
 
@@ -71,7 +89,7 @@ export default {
       if (!(await notionSignatureValid(secret, body, request.headers.get("X-Notion-Signature") || ""))) {
         return json({ ok: false, error: "invalid notion signature" }, 403);
       }
-      ctx.waitUntil(runSync(env).then((res) => res.text()).then((syncBody) => console.log("notion webhook sync", syncBody)));
+      ctx.waitUntil(kickSync(env, "notion-webhook"));
       return json({ ok: true, accepted: true }, 202);
     }
 
@@ -82,6 +100,31 @@ export default {
     if (controller.cron === "7 3 * * *") {
       ctx.waitUntil(renewGoogleWatch(env).then((res) => res.text()).then((body) => console.log("renew", body)));
     }
-    ctx.waitUntil(runSync(env).then((res) => res.text()).then((body) => console.log("scheduled sync", body)));
+    ctx.waitUntil(kickSync(env, `cron:${controller.cron}`));
+  },
+
+  async queue(batch: MessageBatch, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      const body = message.body as { type?: string; reason?: string };
+      if (body.type !== "sync") continue;
+      try {
+        const stats = await runSyncJob(env, `queue:${body.reason || "sync"}`);
+        console.log(JSON.stringify({ message: "queue sync completed", reason: body.reason, stats }));
+        if (stats.has_more) await enqueueSync(env, "continue");
+      } catch (error) {
+        const kind = classifySyncError(error);
+        console.error(JSON.stringify({ message: "queue sync failed", kind, error: errorMessage(error) }));
+        if (kind === "retryable") throw error;
+      }
+    }
   },
 };
+
+async function kickSync(env: Env, reason: string): Promise<void> {
+  if (await enqueueSync(env, reason)) {
+    console.log(JSON.stringify({ message: "sync enqueued", reason }));
+    return;
+  }
+  const response = await runSync(env);
+  console.log(JSON.stringify({ message: "sync ran without queue binding", reason, status: response.status, body: await response.text() }));
+}
