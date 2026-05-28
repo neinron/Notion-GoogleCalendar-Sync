@@ -2,10 +2,10 @@
 
 This service keeps a Notion task database and one dedicated Google Calendar in sync.
 
-The main production deployment is a Cloudflare Worker at:
+The primary deployment is a Cloudflare Worker. Set the public URL through `PUBLIC_BASE_URL` and the route in `wrangler.toml`.
 
 ```text
-https://notionsync.jaronschurer.com
+https://<your-sync-host>
 ```
 
 The repository also contains an older Flask/PythonAnywhere app. That app is retained only as a temporary fallback and legacy reference; new development should target the Cloudflare Worker.
@@ -121,7 +121,7 @@ NOTION_WEBHOOK_VERIFICATION_TOKEN=secret_from_notion_after_subscription_probe
 
 Non-secret Worker vars live in `wrangler.toml`:
 
-- `PUBLIC_BASE_URL=https://notionsync.jaronschurer.com`
+- `PUBLIC_BASE_URL=https://<your-sync-host>`
 - `NOTION_VERSION=2022-06-28`
 - `GOOGLE_TIME_ZONE=Europe/Berlin`
 - `DEPLOY_BRANCH=main`
@@ -164,7 +164,7 @@ Deploy:
 npm run deploy:worker
 ```
 
-`wrangler.toml` binds the Worker route for `notionsync.jaronschurer.com/*`. SSL is Cloudflare-managed.
+`wrangler.toml` binds the Worker route for your configured host. SSL is Cloudflare-managed.
 
 ## Operational Endpoints
 
@@ -189,7 +189,7 @@ More detail: [docs/operations.md](docs/operations.md).
 Google Calendar watch channel:
 
 ```bash
-curl -fsS "https://notionsync.jaronschurer.com/google/watch/renew?token=<SYNC_SECRET>"
+curl -fsS "https://<your-sync-host>/google/watch/renew?token=<SYNC_SECRET>"
 ```
 
 Google sends an initial `sync` notification. The Worker acknowledges it without running a sync. Later `exists` notifications enqueue the normal sync engine.
@@ -197,7 +197,7 @@ Google sends an initial `sync` notification. The Worker acknowledges it without 
 Notion webhook target:
 
 ```text
-https://notionsync.jaronschurer.com/webhooks/notion
+https://<your-sync-host>/webhooks/notion
 ```
 
 Notion sends a one-time `verification_token`. The Worker stores it in D1 automatically. Future Notion webhook payloads must include a matching `X-Notion-Signature`, or the Worker rejects them.
@@ -205,17 +205,17 @@ Notion sends a one-time `verification_token`. The Worker stores it in D1 automat
 ## Production Cutover Checklist
 
 1. Deploy the Worker.
-2. Confirm `GET https://notionsync.jaronschurer.com/health` returns `ok: true`.
+2. Confirm `GET https://<your-sync-host>/health` returns `ok: true`.
 3. Run `GET /sync?token=<SYNC_SECRET>` manually. Repeat while `has_more: true`, or let Queue continuation jobs drain it.
 4. Run `GET /google/watch/renew?token=<SYNC_SECRET>`.
 5. Confirm `GET /webhook-channels?token=<SYNC_SECRET>` shows an active Google channel.
-6. Change the Notion webhook subscription to `https://notionsync.jaronschurer.com/webhooks/notion` and complete verification.
+6. Change the Notion webhook subscription to `https://<your-sync-host>/webhooks/notion` and complete verification.
 7. Watch Worker logs for the first 24 hours.
 8. Disable PythonAnywhere scheduled tasks and webhooks only after Cloudflare sync and webhooks are stable.
 
 ## PythonAnywhere Fallback
 
-The Flask service is legacy fallback only. It still supports the same sync model, plus the old GitHub `/update` auto-deploy route for PythonAnywhere.
+The Flask service is legacy fallback only. It still supports the same sync model. Keep any legacy deployment hooks private and HMAC-protected.
 
 Local fallback development:
 

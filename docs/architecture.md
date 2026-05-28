@@ -19,7 +19,7 @@ Notion remains the product and planning source of truth. Google Calendar is a sc
 
 Production runtime:
 
-- Cloudflare Worker serves `https://notionsync.jaronschurer.com`.
+- Cloudflare Worker serves the host configured in `PUBLIC_BASE_URL` and `wrangler.toml`.
 - D1 binding `DB` stores technical state.
 - Queue binding `SYNC_QUEUE` handles background sync jobs and retries.
 - Cron Triggers provide a 15-minute safety sync and daily Google watch renewal.

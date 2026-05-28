@@ -39,6 +39,7 @@ def cfg(tmp: Path) -> Config:
         state_db_path=tmp / "state.sqlite3",
         sync_lock_path=tmp / "sync.lock",
         deploy_lock_path=tmp / "deploy.lock",
+        enable_legacy_deploy_webhook=True,
     )
 
 
@@ -61,6 +62,13 @@ class RouteDeployTests(unittest.TestCase):
             client = create_app(cfg(Path(d))).test_client()
             res = client.post("/update", json={"ref": "refs/heads/main"}, headers={"X-Hub-Signature-256": "sha256=bad"})
             self.assertEqual(res.status_code, 403)
+
+    def test_legacy_deploy_webhook_disabled_by_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            conf = Config(**{**cfg(Path(d)).__dict__, "enable_legacy_deploy_webhook": False})
+            client = create_app(conf).test_client()
+            res = client.post("/update", json={"ref": "refs/heads/main"}, headers={"X-Hub-Signature-256": "sha256=bad"})
+            self.assertEqual(res.status_code, 404)
 
     def test_non_main_push_ignored(self):
         with tempfile.TemporaryDirectory() as d:

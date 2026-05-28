@@ -7,7 +7,7 @@ This document covers day-to-day operation of the Cloudflare Worker deployment.
 Open:
 
 ```text
-https://notionsync.jaronschurer.com/health
+https://<your-sync-host>/health
 ```
 
 Healthy response:
@@ -30,7 +30,7 @@ If `ok` is false, configure the missing secret or binding before running sync.
 Run one sync batch:
 
 ```bash
-curl -fsS "https://notionsync.jaronschurer.com/sync?token=<SYNC_SECRET>"
+curl -fsS "https://<your-sync-host>/sync?token=<SYNC_SECRET>"
 ```
 
 If the response contains `"has_more": true`, more batches are needed. Either repeat the request or let Queue continuation jobs finish the scan.
@@ -48,7 +48,7 @@ Important response counters:
 ## Inspect Recent Runs
 
 ```bash
-curl -fsS "https://notionsync.jaronschurer.com/runs?token=<SYNC_SECRET>"
+curl -fsS "https://<your-sync-host>/runs?token=<SYNC_SECRET>"
 ```
 
 Use this after deploys, webhook changes, or large Notion edits to confirm batches are completing.
@@ -56,7 +56,7 @@ Use this after deploys, webhook changes, or large Notion edits to confirm batche
 ## Inspect Conflicts
 
 ```bash
-curl -fsS "https://notionsync.jaronschurer.com/conflicts?token=<SYNC_SECRET>"
+curl -fsS "https://<your-sync-host>/conflicts?token=<SYNC_SECRET>"
 ```
 
 `/conflicts` is intended for real manual data conflicts. Retryable infrastructure/API failures should not remain there.
@@ -64,13 +64,13 @@ curl -fsS "https://notionsync.jaronschurer.com/conflicts?token=<SYNC_SECRET>"
 ## Renew Google Watch
 
 ```bash
-curl -fsS "https://notionsync.jaronschurer.com/google/watch/renew?token=<SYNC_SECRET>"
+curl -fsS "https://<your-sync-host>/google/watch/renew?token=<SYNC_SECRET>"
 ```
 
 Then confirm the active channel:
 
 ```bash
-curl -fsS "https://notionsync.jaronschurer.com/webhook-channels?token=<SYNC_SECRET>"
+curl -fsS "https://<your-sync-host>/webhook-channels?token=<SYNC_SECRET>"
 ```
 
 The daily Cron Trigger renews the watch automatically, but manual renewal is useful after deploys, credential changes, or calendar permission changes.
@@ -161,7 +161,7 @@ Run `/google/watch/renew`, inspect `/webhook-channels`, and tail logs. Google wa
 Confirm the subscription URL is:
 
 ```text
-https://notionsync.jaronschurer.com/webhooks/notion
+https://<your-sync-host>/webhooks/notion
 ```
 
 If needed, delete the stored D1 verification token or set `NOTION_WEBHOOK_VERIFICATION_TOKEN` explicitly as a Worker secret.

@@ -4,7 +4,7 @@
 
 Applies to the Notion-to-Google Calendar sync service.
 
-The production target is the Cloudflare Worker on `notionsync.jaronschurer.com`. The Flask/PythonAnywhere app is retained as a temporary fallback and legacy reference.
+The production target is the Cloudflare Worker configured in `wrangler.toml`. The Flask/PythonAnywhere app is retained as a temporary fallback and legacy reference.
 
 ## Commands
 

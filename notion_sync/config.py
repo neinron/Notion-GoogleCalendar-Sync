@@ -26,6 +26,7 @@ class Config:
     deploy_lock_path: Path
     branch: str = "main"
     notion_version: str = "2022-06-28"
+    enable_legacy_deploy_webhook: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -54,6 +55,7 @@ class Config:
             deploy_lock_path=Path(os.getenv("DEPLOY_LOCK_PATH", var_dir / "deploy.lock")),
             branch=os.getenv("DEPLOY_BRANCH", "main"),
             notion_version=os.getenv("NOTION_VERSION", "2022-06-28"),
+            enable_legacy_deploy_webhook=os.getenv("ENABLE_LEGACY_DEPLOY_WEBHOOK", "").lower() in {"1", "true", "yes"},
         )
 
     def missing_required(self) -> list[str]:

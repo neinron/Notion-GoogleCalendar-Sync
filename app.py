@@ -179,6 +179,8 @@ def create_app(config: Config | None = None) -> Flask:
 
     @app.route("/update", methods=["POST"])
     def update():
+        if not cfg.enable_legacy_deploy_webhook:
+            return jsonify({"ok": False, "error": "legacy deploy webhook is disabled"}), 404
         with FileLock(cfg.deploy_lock_path):
             result, status = run_deploy_from_request(request, cfg, logger)
         return jsonify(result), status
