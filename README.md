@@ -1,36 +1,104 @@
 # Notion Calendar Sync
 
-Cloudflare Worker service that syncs a Notion task database with one dedicated Google Calendar at:
+This service keeps a Notion task database and one dedicated Google Calendar in sync.
+
+The main production deployment is a Cloudflare Worker at:
 
 ```text
 https://notionsync.jaronschurer.com
 ```
 
-The legacy Flask/PythonAnywhere service remains in this repository as a temporary fallback during cutover.
+The repository also contains an older Flask/PythonAnywhere app. That app is retained only as a temporary fallback and legacy reference; new development should target the Cloudflare Worker.
 
-The old ICS feed has been removed. Google Calendar now stores real events, and the service writes safe changes back to Notion.
+## Why This Exists
 
-## Behavior
+Notion is the planning system: tasks, course relations, completion status, and the intended work date live there. Google Calendar is the execution surface: tasks that have a Notion `Do Date` should appear as real calendar events so they can be moved, edited, and seen alongside other commitments.
 
-- Notion tasks with `Do Date` become Google Calendar events.
-- Google events store `extendedProperties.private.notion_page_id`.
-- Moving or editing a synced Google event updates the Notion task.
-- Deleting a Google event does not delete, complete, or unschedule the Notion task; it sets the Notion select property `Synced with Google` to `deleted`.
-- Completed Notion tasks remove their Google events.
-- Only tasks related to a Notion course page where `Registration` is checked are synced; `Registered` is accepted as a fallback property name. Events for tasks from unregistered courses are removed from Google.
-- Notion remains the source of truth for whether a task should appear in Google: `Synced with Google = deleted` prevents/reverses Google event creation until it is changed in Notion.
-- If Notion and Google both changed since the last successful sync, Notion wins and the Google event is rebuilt from the Notion task.
+The sync is intentionally narrow:
 
-## Cloudflare Worker Runtime
+- It syncs Notion tasks into one dedicated Google Calendar.
+- It writes safe scheduling changes from Google Calendar back to Notion.
+- It does not treat Google Calendar as the source for task completion, course registration, or task deletion.
+- It avoids importing historic PythonAnywhere state into Cloudflare D1 unless explicitly requested.
 
-- HTTP/webhook runtime: Cloudflare Workers.
-- State: fresh D1 database bound as `DB`.
-- Async work: Cloudflare Queue bound as `SYNC_QUEUE`; webhooks enqueue sync jobs and return quickly.
-- Secrets: Cloudflare Worker Secrets.
-- Public hostname: `notionsync.jaronschurer.com`.
-- Cron Triggers: every 15 minutes enqueue a safety sync, and daily at 03:07 UTC renews the Google watch plus enqueues a safety sync.
+This replaced an older ICS feed. Google Calendar now contains real events with private metadata linking each event back to the Notion page.
 
-## Required Worker Secrets
+## Current Architecture
+
+```text
+Notion task database
+        |
+        | Notion webhook + periodic scan
+        v
+Cloudflare Worker  <--- Google Calendar webhook
+        |
+        | D1 state: mappings, hashes, cursors, runs, channels
+        | Queue: retryable/background sync work
+        v
+Dedicated Google Calendar
+```
+
+Runtime pieces:
+
+- Cloudflare Worker handles HTTP endpoints, webhooks, Cron Triggers, and Queue consumers.
+- Cloudflare D1 stores technical sync state only.
+- Cloudflare Queue lets webhooks return quickly and retries transient failures.
+- Worker secrets hold Notion and Google credentials.
+- Cron Triggers enqueue a safety sync every 15 minutes and renew the Google watch daily at 03:07 UTC.
+
+More detail: [docs/architecture.md](docs/architecture.md).
+
+## Sync Rules
+
+High-level behavior:
+
+- A Notion task with a `Do Date` becomes a Google Calendar event.
+- The Google event stores `extendedProperties.private.notion_page_id`.
+- Moving or renaming a synced Google event updates the Notion task's `Do Date` and `Name`.
+- Completing a Notion task removes its Google event.
+- Removing `Do Date` from a Notion task removes its Google event.
+- Deleting a Google event does not delete, complete, or unschedule the Notion task. Instead, Notion property `Synced with Google` is set to `deleted`.
+- `Synced with Google = deleted` prevents the Worker from recreating the Google event until that Notion value is changed.
+- If Notion and Google both changed since the last successful sync, Notion wins and the Google event is rebuilt from Notion.
+
+Course filtering:
+
+- Tasks sync only when they are related to at least one Course page where `Registration` is checked.
+- `Registered` is accepted as a fallback property name.
+- Events for tasks from unregistered courses are removed from Google.
+
+Completion detection accepts status names such as `done`, `complete`, `completed`, `erledigt`, `fertig`, `abgeschlossen`, `archived`, and `archiviert`.
+
+More detail: [docs/architecture.md](docs/architecture.md#sync-model).
+
+## Repository Layout
+
+```text
+worker/src/        Cloudflare Worker source
+worker/test/       Worker unit tests
+migrations/        D1 schema migrations
+docs/              Architecture and operations notes
+app.py             Legacy Flask/PythonAnywhere fallback
+wrangler.toml      Cloudflare Worker, D1, Queue, route, cron config
+```
+
+## Requirements
+
+- Node.js and npm
+- Wrangler CLI through project dependencies
+- Cloudflare account with Workers, D1, and Queues enabled
+- Notion integration with access to the task database and related Course pages
+- Google OAuth client and refresh token for the dedicated calendar
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+## Configuration
+
+Worker production secrets:
 
 ```env
 NOTION_API_KEY=secret_...
@@ -45,31 +113,20 @@ SYNC_SECRET=long-random-secret
 GOOGLE_WEBHOOK_TOKEN=long-random-secret
 ```
 
-Optional:
+Optional secret:
 
 ```env
 NOTION_WEBHOOK_VERIFICATION_TOKEN=secret_from_notion_after_subscription_probe
 ```
 
-`PUBLIC_BASE_URL=https://notionsync.jaronschurer.com`, `NOTION_VERSION`, and `GOOGLE_TIME_ZONE` are non-secret Worker vars in `wrangler.toml`.
+Non-secret Worker vars live in `wrangler.toml`:
 
-## Worker Development
+- `PUBLIC_BASE_URL=https://notionsync.jaronschurer.com`
+- `NOTION_VERSION=2022-06-28`
+- `GOOGLE_TIME_ZONE=Europe/Berlin`
+- `DEPLOY_BRANCH=main`
 
-```bash
-npm install
-npm run typecheck
-npm run test:worker
-```
-
-Create the D1 database, copy the returned `database_id` into `wrangler.toml`, and apply migrations:
-
-```bash
-npx wrangler d1 create notion_calendar_sync
-npx wrangler queues create notion-calendar-sync
-npm run d1:migrate:remote
-```
-
-Set production secrets:
+Set production secrets with `wrangler secret put`. Do not commit secrets.
 
 ```bash
 npx wrangler secret put NOTION_API_KEY
@@ -84,6 +141,23 @@ npx wrangler secret put GOOGLE_WEBHOOK_TOKEN
 
 Generate a fresh `GOOGLE_WEBHOOK_TOKEN`; do not reuse tokens from chats, logs, or old environments.
 
+## Development
+
+Run Worker checks:
+
+```bash
+npm run typecheck
+npm run test:worker
+```
+
+Useful setup commands:
+
+```bash
+npx wrangler d1 create notion_calendar_sync
+npm run queue:create
+npm run d1:migrate:remote
+```
+
 Deploy:
 
 ```bash
@@ -92,60 +166,52 @@ npm run deploy:worker
 
 `wrangler.toml` binds the Worker route for `notionsync.jaronschurer.com/*`. SSL is Cloudflare-managed.
 
-## Cutover Checklist
+## Operational Endpoints
 
-1. Deploy the Worker and confirm `GET https://notionsync.jaronschurer.com/health` returns `ok: true`.
-2. Run `GET /sync?token=<SYNC_SECRET>` manually; repeat while `has_more: true`, or let the Queue continuation jobs drain it.
-3. Run `GET /google/watch/renew?token=<SYNC_SECRET>`.
-4. Confirm `GET /webhook-channels?token=<SYNC_SECRET>` shows an active Google channel.
-5. Change the Notion webhook subscription to `https://notionsync.jaronschurer.com/webhooks/notion` and complete verification.
-6. Watch Worker logs for the first 24 hours.
-7. Disable PythonAnywhere scheduled tasks and webhooks only after Cloudflare sync and webhooks are stable.
+Token-protected endpoints require `?token=<SYNC_SECRET>`.
 
-## HTTP Endpoints
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /` | Basic service identity response. |
+| `GET /health` | Configuration and binding health check. |
+| `GET\|POST /sync?token=...` | Run one budgeted sync batch. |
+| `GET /runs?token=...` | Recent sync run summaries. |
+| `GET /conflicts?token=...` | Manual conflicts requiring attention. |
+| `GET\|POST /google/watch/renew?token=...` | Replace the Google Calendar watch channel. |
+| `GET /webhook-channels?token=...` | Registered Google watch channel metadata. |
+| `POST /webhooks/google` | Google Calendar push receiver. |
+| `POST /webhooks/notion` | Notion webhook receiver. |
 
-- `GET /health`: configuration and state health.
-- `GET|POST /sync?token=...`: run one budgeted sync batch.
-- `GET /conflicts?token=...`: list unresolved manual conflicts only.
-- `GET /runs?token=...`: list recent sync run summaries.
-- `POST /webhooks/google`: Google Calendar push notification receiver; enqueues a sync job.
-- `POST /webhooks/notion`: Notion webhook receiver; enqueues a sync job.
-- `GET|POST /google/watch/renew?token=...`: replace the Google Calendar events watch channel.
-- `GET /webhook-channels?token=...`: list registered Google watch channels.
+More detail: [docs/operations.md](docs/operations.md).
 
-## Webhooks
+## Webhook Setup
 
-### Google Calendar
-
-Register or renew the channel:
+Google Calendar watch channel:
 
 ```bash
 curl -fsS "https://notionsync.jaronschurer.com/google/watch/renew?token=<SYNC_SECRET>"
 ```
 
-Google sends `sync` notifications first; the Worker acknowledges those without running a sync. Later `exists` notifications enqueue the normal sync engine.
+Google sends an initial `sync` notification. The Worker acknowledges it without running a sync. Later `exists` notifications enqueue the normal sync engine.
 
-Google watch channels expire. The daily Cron Trigger renews them; `/webhook-channels` shows the active channel metadata.
-
-### Notion
-
-Create a Notion webhook subscription pointing to:
+Notion webhook target:
 
 ```text
 https://notionsync.jaronschurer.com/webhooks/notion
 ```
 
-Notion will POST a one-time `verification_token`. The Worker stores it in D1 automatically. You can also set `NOTION_WEBHOOK_VERIFICATION_TOKEN` as a Worker secret if you prefer env-only configuration.
+Notion sends a one-time `verification_token`. The Worker stores it in D1 automatically. Future Notion webhook payloads must include a matching `X-Notion-Signature`, or the Worker rejects them.
 
-Future Notion webhook payloads must include a matching `X-Notion-Signature`; otherwise the Worker rejects them.
+## Production Cutover Checklist
 
-## Sync Reliability Model
-
-The Worker processes small batches so it stays under Cloudflare subrequest limits. It stores only technical sync state in D1: event IDs, hashes, run logs, cursors, and scan markers. Notion properties decide whether a task belongs in Google.
-
-Runtime/API failures such as subrequest limits, rate limits, network errors, and 5xx responses are marked `retry_pending` and retried by the Queue. `/conflicts` is reserved for real manual data conflicts. Course registration is read from the related Course page's `Registration` checkbox and cached only in memory for the current Worker invocation.
-
-If old rows were marked as `conflict` by a previous subrequest failure, migration `0002_robust_sync.sql` resets those rows to `retry_pending` and clears stale cursors.
+1. Deploy the Worker.
+2. Confirm `GET https://notionsync.jaronschurer.com/health` returns `ok: true`.
+3. Run `GET /sync?token=<SYNC_SECRET>` manually. Repeat while `has_more: true`, or let Queue continuation jobs drain it.
+4. Run `GET /google/watch/renew?token=<SYNC_SECRET>`.
+5. Confirm `GET /webhook-channels?token=<SYNC_SECRET>` shows an active Google channel.
+6. Change the Notion webhook subscription to `https://notionsync.jaronschurer.com/webhooks/notion` and complete verification.
+7. Watch Worker logs for the first 24 hours.
+8. Disable PythonAnywhere scheduled tasks and webhooks only after Cloudflare sync and webhooks are stable.
 
 ## PythonAnywhere Fallback
 
