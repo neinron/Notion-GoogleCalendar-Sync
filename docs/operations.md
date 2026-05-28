@@ -123,7 +123,7 @@ Apply remote migrations:
 npm run d1:migrate:remote
 ```
 
-Do not import the old PythonAnywhere SQLite state into D1 unless that is explicitly requested. Cloudflare D1 is the fresh production state for the Worker.
+Do not import old legacy SQLite state into D1 unless that is explicitly requested. Cloudflare D1 is the fresh production state for the Worker.
 
 ## Common Issues
 

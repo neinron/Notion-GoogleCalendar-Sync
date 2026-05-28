@@ -8,7 +8,7 @@ The primary deployment is a Cloudflare Worker. Set the public URL through `PUBLI
 https://<your-sync-host>
 ```
 
-The repository also contains an older Flask/PythonAnywhere app. That app is retained only as a temporary fallback and legacy reference; new development should target the Cloudflare Worker.
+The older Flask/PythonAnywhere implementation has been moved to [neinron/python-notion-googlecalendar-sync](https://github.com/neinron/python-notion-googlecalendar-sync). New development in this repository should target the Cloudflare Worker.
 
 ## Why This Exists
 
@@ -19,7 +19,7 @@ The sync is intentionally narrow:
 - It syncs Notion tasks into one dedicated Google Calendar.
 - It writes safe scheduling changes from Google Calendar back to Notion.
 - It does not treat Google Calendar as the source for task completion, course registration, or task deletion.
-- It avoids importing historic PythonAnywhere state into Cloudflare D1 unless explicitly requested.
+- It avoids importing historic legacy SQLite state into Cloudflare D1 unless explicitly requested.
 
 This replaced an older ICS feed. Google Calendar now contains real events with private metadata linking each event back to the Notion page.
 
@@ -78,7 +78,6 @@ worker/src/        Cloudflare Worker source
 worker/test/       Worker unit tests
 migrations/        D1 schema migrations
 docs/              Architecture and operations notes
-app.py             Legacy Flask/PythonAnywhere fallback
 wrangler.toml      Cloudflare Worker, D1, Queue, route, cron config
 ```
 
@@ -211,23 +210,8 @@ Notion sends a one-time `verification_token`. The Worker stores it in D1 automat
 5. Confirm `GET /webhook-channels?token=<SYNC_SECRET>` shows an active Google channel.
 6. Change the Notion webhook subscription to `https://<your-sync-host>/webhooks/notion` and complete verification.
 7. Watch Worker logs for the first 24 hours.
-8. Disable PythonAnywhere scheduled tasks and webhooks only after Cloudflare sync and webhooks are stable.
+8. Disable old legacy scheduled tasks and webhooks only after Cloudflare sync and webhooks are stable.
 
-## PythonAnywhere Fallback
+## Legacy Python Implementation
 
-The Flask service is legacy fallback only. It still supports the same sync model. Keep any legacy deployment hooks private and HMAC-protected.
-
-Local fallback development:
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python app.py
-```
-
-Python fallback tests:
-
-```bash
-python -m unittest discover -s tests
-```
+The PythonAnywhere fallback/reference implementation lives in [neinron/python-notion-googlecalendar-sync](https://github.com/neinron/python-notion-googlecalendar-sync).
